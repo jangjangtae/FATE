@@ -14,6 +14,7 @@ def make_env():
     os.environ["CRAFTER_FAULT_SAMPLER"] = "0"
     os.environ["CRAFTER_FAULT_PROFILE"] = "train"
     os.environ["CRAFTER_FAULT_COOLDOWN"] = "0"
+    os.environ.setdefault("CRAFTER_OUTPUT_DIR", "/tmp/crafter_fault_unit_tests")
 
     env = Crafter(
         task="reward",
@@ -46,7 +47,26 @@ def prime_env(env, family, subtype):
     env._sticky_remaining = 0
     env._requested_hist = deque([0, 0], maxlen=2)
     env._executed_hist = deque([0, 0], maxlen=2)
-    env._reward_hist = deque([0.0, 0.0], maxlen=2)
+    env._reward_hist = deque([0.0, 0.0, 0.0, 0.0], maxlen=4)
+
+
+def set_recent_revisit(env):
+    env._last_ctx_key = b"ctx"
+    env._ctx_visit_steps[b"ctx"] = deque([0, 5], maxlen=4)
+    env._episode_step = 5
+
+
+def test_drop_to_fallback():
+    env = make_env()
+    prime_env(env, "legacy_action_exec", "drop_to_fallback")
+    env._fault_spec["fallback_action"] = 0
+
+    out_action, applied, fault_type = env._apply_action_fault(2)
+
+    assert applied == 1
+    assert fault_type == "drop_to_fallback"
+    assert out_action == 0
+    print("PASS: drop_to_fallback")
 
 
 def test_remap_after_success_switch():
@@ -94,6 +114,33 @@ def test_sticky_after_repeat_switch():
     print("PASS: sticky_after_repeat_switch")
 
 
+def test_remap_after_repeat_switch():
+    env = make_env()
+    prime_env(env, "action_exec", "remap_after_repeat_switch")
+    env._requested_hist = deque([1, 1], maxlen=2)
+
+    out_action, applied, fault_type = env._apply_action_fault(2)
+
+    assert applied == 1
+    assert fault_type == "remap_after_repeat_switch"
+    assert out_action != 2
+    print("PASS: remap_after_repeat_switch")
+
+
+def test_delay_after_late_episode_switch():
+    env = make_env()
+    prime_env(env, "action_exec", "delay_after_late_episode_switch")
+    env._length = 60
+    env._last_requested_action = 1
+
+    out_action, applied, fault_type = env._apply_action_fault(2)
+
+    assert applied == 1
+    assert fault_type == "delay_after_late_episode_switch"
+    assert out_action == 1
+    print("PASS: delay_after_late_episode_switch")
+
+
 def test_ignore_nonzero_after_reward():
     env = make_env()
     prime_env(env, "context_exec", "ignore_nonzero_after_reward")
@@ -117,6 +164,61 @@ def test_ignore_switch_late_episode():
     assert fault_type == "ignore_switch_late_episode"
     assert out_action == 0
     print("PASS: ignore_switch_late_episode")
+
+
+def test_ignore_nonzero_after_two_rewards():
+    env = make_env()
+    prime_env(env, "context_exec", "ignore_nonzero_after_two_rewards")
+    env._reward_hist = deque([1.0, 0.0, 1.0, 0.0], maxlen=4)
+
+    out_action, applied, fault_type = env._apply_action_fault(2)
+
+    assert applied == 1
+    assert fault_type == "ignore_nonzero_after_two_rewards"
+    assert out_action == 0
+    print("PASS: ignore_nonzero_after_two_rewards")
+
+
+def test_revisit_action_ignore():
+    env = make_env()
+    prime_env(env, "context_exec", "revisit_action_ignore")
+    set_recent_revisit(env)
+
+    out_action, applied, fault_type = env._apply_action_fault(2)
+
+    assert applied == 1
+    assert fault_type == "revisit_action_ignore"
+    assert out_action == 0
+    print("PASS: revisit_action_ignore")
+
+
+def test_revisit_action_delay():
+    env = make_env()
+    prime_env(env, "action_exec", "revisit_action_delay")
+    set_recent_revisit(env)
+    env._last_requested_action = 1
+
+    out_action, applied, fault_type = env._apply_action_fault(2)
+
+    assert applied == 1
+    assert fault_type == "revisit_action_delay"
+    assert out_action == 1
+    print("PASS: revisit_action_delay")
+
+
+def test_delayed_switch_failure():
+    env = make_env()
+    prime_env(env, "action_exec", "delayed_switch_failure")
+    env._episode_step = 12
+    env._last_positive_reward_step = 10
+    env._last_requested_action = 1
+
+    out_action, applied, fault_type = env._apply_action_fault(2)
+
+    assert applied == 1
+    assert fault_type == "delayed_switch_failure"
+    assert out_action != 2
+    print("PASS: delayed_switch_failure")
 
 
 def test_reward_delay_on_positive():
@@ -154,6 +256,33 @@ def test_reward_zero_on_positive():
     print("PASS: reward_zero_on_positive")
 
 
+def test_reward_zero_after_repeat_switch():
+    env = make_env()
+    prime_env(env, "reward_timing", "reward_zero_after_repeat_switch")
+    env._requested_hist = deque([1, 1], maxlen=2)
+
+    reward, applied, fault_type = env._apply_reward_fault(2.0, requested_action=2)
+
+    assert applied == 1
+    assert fault_type == "reward_zero_after_repeat_switch"
+    assert reward == 0.0
+    print("PASS: reward_zero_after_repeat_switch")
+
+
+def test_reward_delay_after_two_rewards():
+    env = make_env()
+    prime_env(env, "reward_timing", "reward_delay_after_two_rewards")
+    env._reward_hist = deque([1.0, 0.0, 1.0, 0.0], maxlen=4)
+
+    reward, applied, fault_type = env._apply_reward_fault(2.0, requested_action=1)
+
+    assert applied == 1
+    assert fault_type == "reward_delay_after_two_rewards"
+    assert reward == 0.0
+    assert env._pending_reward > 0.0
+    print("PASS: reward_delay_after_two_rewards")
+
+
 def test_early_done_after_success_switch():
     env = make_env()
     prime_env(env, "termination_logic", "early_done_after_success_switch")
@@ -172,17 +301,44 @@ def test_early_done_after_success_switch():
     print("PASS: early_done_after_success_switch")
 
 
+def test_early_done_after_repeat_switch():
+    env = make_env()
+    prime_env(env, "termination_logic", "early_done_after_repeat_switch")
+    env._requested_hist = deque([1, 1], maxlen=2)
+
+    done, info, applied, fault_type = env._apply_termination_fault(
+        requested_action=2,
+        done=False,
+        info={"discount": 1.0},
+    )
+    assert applied == 1
+    assert fault_type == "early_done_after_repeat_switch"
+    assert done is True
+    assert info["discount"] == 0.0
+    print("PASS: early_done_after_repeat_switch")
+
+
 def run_all():
+    test_drop_to_fallback()
     test_remap_after_success_switch()
     test_delay_after_success()
     test_sticky_after_repeat_switch()
+    test_remap_after_repeat_switch()
+    test_delay_after_late_episode_switch()
     test_ignore_nonzero_after_reward()
     test_ignore_switch_late_episode()
+    test_ignore_nonzero_after_two_rewards()
+    test_revisit_action_ignore()
+    test_revisit_action_delay()
+    test_delayed_switch_failure()
     test_reward_delay_on_positive()
     test_reward_scale_half_on_positive_switch()
     test_reward_zero_on_positive()
+    test_reward_zero_after_repeat_switch()
+    test_reward_delay_after_two_rewards()
     test_early_done_after_success_switch()
-    print("\nALL 9 FAULT TESTS PASSED")
+    test_early_done_after_repeat_switch()
+    print("\nALL 19 LOW-LEVEL FAULT TESTS PASSED")
 
 
 if __name__ == "__main__":

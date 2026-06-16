@@ -20,6 +20,60 @@ FAULT_FAMILY_IDS = {
     'semantic_high_level': 6,
 }
 
+FAULT_FREQUENCY_TIER_IDS = {
+    'custom': 0,
+    'diagnostic': 1,
+    'benchmark': 2,
+    'realistic': 3,
+    'sparse': 4,
+}
+
+FAULT_FREQUENCY_TIER_DEFAULTS = {
+    # Frequent enough for instrumentation checks and visual debugging.
+    'diagnostic': {
+        'CRAFTER_FAULT_EP_PROB': '0.5',
+        'CRAFTER_FAULT_SEVERITIES': '0.2,0.3',
+        'CRAFTER_SEMANTIC_FAULT_EP_PROB': '0.5',
+        'CRAFTER_SEMANTIC_FAULT_MANIFEST_PROB': '1.0',
+    },
+    # Main benchmark tier: trigger contexts are reachable, manifestations are
+    # not guaranteed, so trigger reach and manifestation can be analyzed apart.
+    'benchmark': {
+        'CRAFTER_FAULT_EP_PROB': '0.25',
+        'CRAFTER_FAULT_SEVERITIES': '0.05,0.1',
+        'CRAFTER_SEMANTIC_FAULT_EP_PROB': '0.25',
+        'CRAFTER_SEMANTIC_FAULT_MANIFEST_PROB': '0.5',
+    },
+    # Evaluation-only sparse tiers for realism checks.
+    'realistic': {
+        'CRAFTER_FAULT_EP_PROB': '0.1',
+        'CRAFTER_FAULT_SEVERITIES': '0.01,0.05',
+        'CRAFTER_SEMANTIC_FAULT_EP_PROB': '0.1',
+        'CRAFTER_SEMANTIC_FAULT_MANIFEST_PROB': '0.2',
+    },
+    'sparse': {
+        'CRAFTER_FAULT_EP_PROB': '0.03',
+        'CRAFTER_FAULT_SEVERITIES': '0.005,0.01',
+        'CRAFTER_SEMANTIC_FAULT_EP_PROB': '0.03',
+        'CRAFTER_SEMANTIC_FAULT_MANIFEST_PROB': '0.05',
+    },
+}
+
+
+def _apply_fault_frequency_tier_env():
+  tier = os.getenv(
+      'CRAFTER_FAULT_FREQ_TIER',
+      os.getenv('CRAFTER_FAULT_RARITY_TIER', 'custom')).strip().lower()
+  tier = tier or 'custom'
+  if tier not in FAULT_FREQUENCY_TIER_IDS:
+    raise ValueError(
+        f'Unknown CRAFTER_FAULT_FREQ_TIER={tier!r}. Expected one of '
+        f'{sorted(FAULT_FREQUENCY_TIER_IDS)}.')
+  for key, value in FAULT_FREQUENCY_TIER_DEFAULTS.get(tier, {}).items():
+    os.environ.setdefault(key, value)
+  return tier
+
+
 FAULT_TYPE_IDS = {
     'none': 0,
     'drop_to_fallback': 1,
@@ -184,6 +238,7 @@ class Crafter(embodied.Env):
       trace_path=None,
   ):
     assert task in ('reward', 'noreward')
+    self._fault_frequency_tier = _apply_fault_frequency_tier_env()
     self._env = crafter.Env(size=size, reward=(task == 'reward'), seed=seed)
     self._logs = logs
     self._logdir = logdir and elements.Path(logdir)
@@ -226,6 +281,8 @@ class Crafter(embodied.Env):
     self._fault_severities = self._parse_csv(
         os.getenv('CRAFTER_FAULT_SEVERITIES', '0.1,0.2'),
         cast=float)
+    self._semantic_manifest_prob = float(
+        os.getenv('CRAFTER_SEMANTIC_FAULT_MANIFEST_PROB', '1.0'))
 
     # cooldown
     default_cooldown = '8' if self._fault_profile == 'train' else '0'
@@ -900,7 +957,13 @@ class Crafter(embodied.Env):
     return float(final_reward), info
 
   def _reset_episode_aggregation(self):
+    self._ep_fault_exists_episode = 0
     self._ep_fault_applied_any = 0
+    self._ep_fault_manifest_count = 0
+    self._ep_fault_trigger_context_count = 0
+    self._ep_lowlevel_trigger_context_count = 0
+    self._ep_semantic_trigger_context_count = 0
+    self._ep_fault_manifest_prob_max = 0.0
     self._ep_semantic_fault_applied_any = 0
     self._ep_semantic_fault_count = 0
     self._ep_fault_family = 'none'
@@ -931,7 +994,12 @@ class Crafter(embodied.Env):
       fault_family,
       fault_type,
       fault_trigger,
+      fault_exists_episode,
+      fault_trigger_context,
+      lowlevel_trigger_context,
+      fault_manifest_prob,
       semantic_fault_applied,
+      semantic_trigger_context,
       semantic_trigger_count,
       semantic_first_trigger_step,
       semantic_ctx_upgrade_collect,
@@ -944,7 +1012,15 @@ class Crafter(embodied.Env):
       semantic_post_fault_window,
       semantic_post_fault_nonzero,
       semantic_post_fault_switch):
+    self._ep_fault_exists_episode = max(
+        self._ep_fault_exists_episode, int(fault_exists_episode))
     self._ep_fault_applied_any = max(self._ep_fault_applied_any, int(fault_applied))
+    self._ep_fault_manifest_count += int(fault_applied)
+    self._ep_fault_trigger_context_count += int(fault_trigger_context)
+    self._ep_lowlevel_trigger_context_count += int(lowlevel_trigger_context)
+    self._ep_semantic_trigger_context_count += int(semantic_trigger_context)
+    self._ep_fault_manifest_prob_max = max(
+        float(self._ep_fault_manifest_prob_max), float(fault_manifest_prob))
     self._ep_semantic_fault_applied_any = max(
         self._ep_semantic_fault_applied_any, int(semantic_fault_applied))
     self._ep_semantic_fault_count += int(semantic_fault_applied)
@@ -1053,7 +1129,18 @@ class Crafter(embodied.Env):
         'start_global_step': int(self._episode_start_global_step),
         'end_global_step': int(self._global_step),
         'fault_episode': int(info.get('fault_episode', int(self._fault_episode or self._semantic_fault_episode_seen))),
+        'fault_exists_episode': int(info.get(
+            'fault_exists_episode',
+            int(self._fault_episode or self._semantic_fault_episode_seen))),
+        'fault_trigger_context_reach': int(self._ep_fault_trigger_context_count > 0),
+        'fault_trigger_context_count': int(self._ep_fault_trigger_context_count),
+        'lowlevel_trigger_context_count': int(self._ep_lowlevel_trigger_context_count),
+        'semantic_trigger_context_count': int(self._ep_semantic_trigger_context_count),
         'fault_applied_any': int(self._ep_fault_applied_any),
+        'fault_manifested_any': int(self._ep_fault_applied_any),
+        'fault_manifest_count': int(self._ep_fault_manifest_count),
+        'fault_manifest_prob_max': round(float(self._ep_fault_manifest_prob_max), 6),
+        'fault_frequency_tier': self._fault_frequency_tier,
         'fault_count': int(self._fault_count),
         'fault_rate': float(self._fault_count / max(1, length)),
         'fault_family': fault_family,
@@ -1103,6 +1190,73 @@ class Crafter(embodied.Env):
     with self._episode_summary_path.open('a', encoding='utf-8') as f:
       f.write(json.dumps(summary) + '\n')
       f.flush()
+
+  def _current_fault_manifest_prob(self):
+    if self._fault_spec is None:
+      return 0.0
+    if self._fault_profile in ('eval_seen', 'eval_holdout'):
+      return float(self._fault_spec.get('severity', 0.0))
+    return 1.0
+
+  def _lowlevel_fault_trigger_context(self, requested_action, reward=None, done=False):
+    if self._fault_spec is None:
+      return 0
+
+    family = self._fault_spec.get('family', 'none')
+    subtype = self._fault_spec.get('type', 'none')
+
+    if family == 'legacy_action_exec':
+      return int(self._episode >= self._fault_start_episode)
+
+    if family in ('action_exec', 'context_exec'):
+      if self._sticky_remaining > 0 and self._sticky_action is not None:
+        return int(subtype == 'sticky_after_repeat_switch')
+      checks = {
+          'remap_after_success_switch': (
+              self._success_window_active() and self._switched_action(requested_action)),
+          'delay_after_success': (
+              self._success_window_active() and self._is_nonzero(requested_action)),
+          'sticky_after_repeat_switch': self._repeat_then_switch(requested_action),
+          'ignore_nonzero_after_reward': (
+              self._success_window_active() and self._is_nonzero(requested_action)),
+          'ignore_nonzero_after_two_rewards': (
+              self._recent_positive_count(4) >= 2 and self._is_nonzero(requested_action)),
+          'ignore_switch_late_episode': (
+              self._late_episode() and self._switched_action(requested_action)),
+          'remap_after_repeat_switch': self._repeat_then_switch(requested_action),
+          'delay_after_late_episode_switch': (
+              self._late_episode() and self._switched_action(requested_action)),
+          'revisit_action_ignore': (
+              self._recent_revisit_active() and self._is_nonzero(requested_action)),
+          'revisit_action_delay': (
+              self._recent_revisit_active() and self._switched_action(requested_action)),
+          'delayed_switch_failure': self._delayed_switch_after_success(requested_action),
+      }
+      return int(bool(checks.get(subtype, False)))
+
+    if family == 'reward_timing':
+      if reward is None or float(reward) <= 0.0:
+        return 0
+      checks = {
+          'reward_delay_on_positive': True,
+          'reward_zero_on_positive': True,
+          'reward_scale_half_on_positive_switch': self._switched_action(requested_action),
+          'reward_zero_after_repeat_switch': self._repeat_then_switch(requested_action),
+          'reward_delay_after_two_rewards': self._recent_positive_count(4) >= 2,
+      }
+      return int(bool(checks.get(subtype, False)))
+
+    if family == 'termination_logic':
+      if bool(done):
+        return 0
+      checks = {
+          'early_done_after_success_switch': (
+              self._success_window_active() and self._switched_action(requested_action)),
+          'early_done_after_repeat_switch': self._repeat_then_switch(requested_action),
+      }
+      return int(bool(checks.get(subtype, False)))
+
+    return 0
 
   def _can_fire_now(self):
     if self._fault_spec is None:
@@ -1402,6 +1556,12 @@ class Crafter(embodied.Env):
         'log/reward': elements.Space(np.float32),
         'log/fault_applied': elements.Space(np.int32),
         'log/fault_episode': elements.Space(np.int32),
+        'log/fault_exists_episode': elements.Space(np.int32),
+        'log/fault_trigger_context': elements.Space(np.int32),
+        'log/lowlevel_trigger_context': elements.Space(np.int32),
+        'log/fault_manifested': elements.Space(np.int32),
+        'log/fault_manifest_prob': elements.Space(np.float32),
+        'log/fault_frequency_tier_id': elements.Space(np.int32),
         'log/fault_family_id': elements.Space(np.int32),
         'log/fault_type_id': elements.Space(np.int32),
         'log/fault_count_cumulative': elements.Space(np.int32),
@@ -1513,6 +1673,12 @@ class Crafter(embodied.Env):
           reward=0.0,
           info={
               'fault_episode': int(self._fault_episode),
+              'fault_exists_episode': int(self._fault_episode),
+              'fault_trigger_context': 0,
+              'lowlevel_trigger_context': 0,
+              'fault_manifested': 0,
+              'fault_manifest_prob': float(self._current_fault_manifest_prob()),
+              'fault_frequency_tier': self._fault_frequency_tier,
               'fault_applied': np.int32(0),
               'semantic_fault_episode': np.int32(0),
               'semantic_fault_applied': np.int32(0),
@@ -1544,6 +1710,7 @@ class Crafter(embodied.Env):
       )
 
     requested_action = int(action['action'])
+    lowlevel_trigger_pre = self._lowlevel_fault_trigger_context(requested_action)
 
     if self._coverage_enabled:
       self._record_current_target_coverage()
@@ -1557,6 +1724,7 @@ class Crafter(embodied.Env):
 
     # env step
     image, raw_reward, self._done, info = self._env.step(env_action)
+    env_done_before_termination = bool(self._done)
 
     info = dict(info)
     self._record_player_tile_from_info(info)
@@ -1658,6 +1826,19 @@ class Crafter(embodied.Env):
 
     fault_applied = int(
         action_fault_applied or reward_fault_applied or term_fault_applied or semantic_fault_applied)
+    lowlevel_trigger_context = int(
+        lowlevel_trigger_pre or
+        self._lowlevel_fault_trigger_context(
+            requested_action, reward=raw_reward, done=env_done_before_termination))
+    fault_trigger_context = int(lowlevel_trigger_context or semantic_trigger_context)
+    fault_exists_episode = int(
+        self._fault_episode or semantic_fault_episode or self._semantic_fault_episode_seen)
+    lowlevel_manifest_prob = (
+        self._current_fault_manifest_prob() if int(self._fault_episode) else 0.0)
+    semantic_manifest_prob = (
+        float(info.get('semantic_fault_manifest_prob', self._semantic_manifest_prob))
+        if int(semantic_fault_episode) else 0.0)
+    fault_manifest_prob = max(float(lowlevel_manifest_prob), float(semantic_manifest_prob))
 
     if fault_applied:
       self._fault_count += 1
@@ -1707,7 +1888,14 @@ class Crafter(embodied.Env):
 
     info['reward'] = float(reward)
     info['fault_applied'] = int(fault_applied)
-    episode_fault_flag = int(self._fault_episode or semantic_fault_episode or self._semantic_fault_episode_seen)
+    info['fault_manifested'] = int(fault_applied)
+    info['fault_trigger_context'] = int(fault_trigger_context)
+    info['lowlevel_trigger_context'] = int(lowlevel_trigger_context)
+    info['fault_exists_episode'] = int(fault_exists_episode)
+    info['fault_manifest_prob'] = float(fault_manifest_prob)
+    info['fault_frequency_tier'] = self._fault_frequency_tier
+    info['semantic_fault_manifest_prob'] = float(semantic_manifest_prob)
+    episode_fault_flag = int(fault_exists_episode)
     info['fault_episode'] = episode_fault_flag
     info['fault_family'] = fault_family
     info['fault_type'] = fault_type
@@ -1749,7 +1937,12 @@ class Crafter(embodied.Env):
         fault_family=fault_family,
         fault_type=fault_type,
         fault_trigger=fault_trigger,
+        fault_exists_episode=fault_exists_episode,
+        fault_trigger_context=fault_trigger_context,
+        lowlevel_trigger_context=lowlevel_trigger_context,
+        fault_manifest_prob=fault_manifest_prob,
         semantic_fault_applied=semantic_fault_applied,
+        semantic_trigger_context=semantic_trigger_context,
         semantic_trigger_count=semantic_trigger_count,
         semantic_first_trigger_step=semantic_first_trigger_step,
         semantic_ctx_upgrade_collect=semantic_upgrade_collect_count,
@@ -1770,6 +1963,12 @@ class Crafter(embodied.Env):
           'global_step': int(self._global_step),
           'reward': float(reward),
           'fault_episode': int(episode_fault_flag),
+          'fault_exists_episode': int(fault_exists_episode),
+          'fault_trigger_context': int(fault_trigger_context),
+          'lowlevel_trigger_context': int(lowlevel_trigger_context),
+          'fault_manifested': int(fault_applied),
+          'fault_manifest_prob': float(fault_manifest_prob),
+          'fault_frequency_tier': self._fault_frequency_tier,
           'semantic_fault_episode': int(self._semantic_fault_episode_seen or semantic_fault_episode),
           'fault_applied': int(fault_applied),
           'fault_family': fault_family,
@@ -1939,6 +2138,17 @@ class Crafter(embodied.Env):
     fault_episode = int(self._fault_episode)
     if info and 'fault_episode' in info:
       fault_episode = info['fault_episode']
+    fault_exists_episode = int(
+        info.get('fault_exists_episode', fault_episode)) if info else int(fault_episode)
+    fault_trigger_context = int(info.get('fault_trigger_context', 0)) if info else 0
+    lowlevel_trigger_context = int(info.get('lowlevel_trigger_context', 0)) if info else 0
+    fault_manifested = int(info.get('fault_manifested', fault_applied)) if info else int(fault_applied)
+    fault_manifest_prob = float(info.get('fault_manifest_prob', 0.0)) if info else 0.0
+    fault_frequency_tier = (
+        info.get('fault_frequency_tier', self._fault_frequency_tier)
+        if info else self._fault_frequency_tier)
+    fault_frequency_tier_id = FAULT_FREQUENCY_TIER_IDS.get(
+        str(fault_frequency_tier), 0)
     fault_family = info.get('fault_family', 'none') if info else 'none'
     fault_type = info.get('fault_type', 'none') if info else 'none'
     semantic_fault_type_for_id = (
@@ -2006,6 +2216,12 @@ class Crafter(embodied.Env):
         **{'log/reward': np.float32(log_reward)},
         **{'log/fault_applied': np.int32(fault_applied)},
         **{'log/fault_episode': np.int32(fault_episode)},
+        **{'log/fault_exists_episode': np.int32(fault_exists_episode)},
+        **{'log/fault_trigger_context': np.int32(fault_trigger_context)},
+        **{'log/lowlevel_trigger_context': np.int32(lowlevel_trigger_context)},
+        **{'log/fault_manifested': np.int32(fault_manifested)},
+        **{'log/fault_manifest_prob': np.float32(fault_manifest_prob)},
+        **{'log/fault_frequency_tier_id': np.int32(fault_frequency_tier_id)},
         **{'log/fault_family_id': np.int32(fault_family_id)},
         **{'log/fault_type_id': np.int32(fault_type_id)},
         **{'log/fault_count_cumulative': np.int32(self._fault_count)},
@@ -2081,6 +2297,19 @@ class Crafter(embodied.Env):
         'start_global_step': int(self._episode_start_global_step),
         'end_global_step': int(self._global_step),
         'fault_episode': int(info.get('fault_episode', 0)),
+        'fault_exists_episode': int(info.get(
+            'fault_exists_episode', getattr(self, '_ep_fault_exists_episode', 0))),
+        'fault_trigger_context_count': int(getattr(
+            self, '_ep_fault_trigger_context_count', 0)),
+        'lowlevel_trigger_context_count': int(getattr(
+            self, '_ep_lowlevel_trigger_context_count', 0)),
+        'semantic_trigger_context_count': int(getattr(
+            self, '_ep_semantic_trigger_context_count', 0)),
+        'fault_manifested_any': int(getattr(self, '_ep_fault_applied_any', 0)),
+        'fault_manifest_count': int(getattr(self, '_ep_fault_manifest_count', 0)),
+        'fault_manifest_prob_max': round(float(getattr(
+            self, '_ep_fault_manifest_prob_max', info.get('fault_manifest_prob', 0.0))), 6),
+        'fault_frequency_tier': self._fault_frequency_tier,
         'fault_count': int(self._fault_count),
         'fault_rate': float(self._fault_count / max(1, length)),
         'fault_family': self._ep_fault_family if getattr(self, '_ep_fault_family', 'none') != 'none' else info.get('fault_family', 'none'),

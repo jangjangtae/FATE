@@ -155,7 +155,12 @@ class CaseRecorder:
         'index': len(self.records),
         'label': label,
         'fault_applied': fault_applied,
+        'fault_exists_episode': int(obs.get('log/fault_exists_episode', 0)),
+        'fault_trigger_context': int(obs.get('log/fault_trigger_context', 0)),
+        'fault_manifested': int(obs.get('log/fault_manifested', fault_applied)),
+        'fault_manifest_prob': float(obs.get('log/fault_manifest_prob', 0.0)),
         'semantic_fault_applied': semantic_applied,
+        'semantic_trigger_context': int(obs.get('log/semantic_trigger_context', 0)),
         'mean_rgb': rgb_mean(frame),
         'frame': frame,
     }
