@@ -189,9 +189,14 @@ class EvalCollector:
           'rnd_intrinsic_reward': 0.0,
           'length': 0,
           'fault_episode': 0,
+          'fault_exists_episode': 0,
           'fault_applied_count': 0,
+          'fault_manifested_count': 0,
+          'fault_trigger_context_count': 0,
+          'lowlevel_trigger_context_count': 0,
           'semantic_fault_applied_count': 0,
           'semantic_trigger_context_count': 0,
+          'fault_manifest_prob_max': 0.0,
           'max_ref_bug_score': -1e9,
           'max_ref_bug_kl': -1e9,
           'max_fault_score': -1e9,
@@ -209,6 +214,13 @@ class EvalCollector:
     rnd_intrinsic_reward = _scalar(tran.get('log/rnd_intrinsic_reward', 0.0))
     fault_episode = int(_scalar(tran.get('log/fault_episode', 0.0)) > 0.5)
     fault_applied = int(_scalar(tran.get('log/fault_applied', 0.0)) > 0.5)
+    fault_exists_episode = int(_scalar(
+        tran.get('log/fault_exists_episode', fault_episode)) > 0.5)
+    lowlevel_trigger_context = int(_scalar(
+        tran.get('log/lowlevel_trigger_context', 0.0)) > 0.5)
+    fault_manifested = int(_scalar(
+        tran.get('log/fault_manifested', fault_applied)) > 0.5)
+    fault_manifest_prob = _scalar(tran.get('log/fault_manifest_prob', 0.0))
     semantic_fault_episode = int(
         _scalar(tran.get('log/semantic_fault_episode', 0.0)) > 0.5)
     semantic_fault_applied = int(
@@ -229,8 +241,12 @@ class EvalCollector:
         'delayed_after_use': int(_scalar(
             tran.get('log/semantic_ctx_delayed_after_use', 0.0)) > 0.5),
     }
-    fault_episode = max(fault_episode, semantic_fault_episode)
-    fault_applied = max(fault_applied, semantic_fault_applied)
+    fault_trigger_context = int(_scalar(tran.get(
+        'log/fault_trigger_context',
+        max(lowlevel_trigger_context, semantic_trigger_context))) > 0.5)
+    fault_episode = max(fault_episode, semantic_fault_episode, fault_exists_episode)
+    fault_applied = max(fault_applied, semantic_fault_applied, fault_manifested)
+    fault_manifested = max(fault_manifested, fault_applied)
     fault_score = _scalar(tran.get(
         'log/ref_fault_score', tran.get('log/ref_bug_score', 0.0)))
     latent_kl = _scalar(tran.get(
@@ -252,9 +268,16 @@ class EvalCollector:
     buf['rnd_intrinsic_reward'] += rnd_intrinsic_reward
     buf['length'] += 1
     buf['fault_episode'] = max(buf['fault_episode'], fault_episode)
+    buf['fault_exists_episode'] = max(
+        buf['fault_exists_episode'], fault_exists_episode)
     buf['fault_applied_count'] += fault_applied
+    buf['fault_manifested_count'] += fault_manifested
+    buf['fault_trigger_context_count'] += fault_trigger_context
+    buf['lowlevel_trigger_context_count'] += lowlevel_trigger_context
     buf['semantic_fault_applied_count'] += semantic_fault_applied
     buf['semantic_trigger_context_count'] += semantic_trigger_context
+    buf['fault_manifest_prob_max'] = max(
+        buf['fault_manifest_prob_max'], float(fault_manifest_prob))
     for key, value in semantic_context_flags.items():
       buf[f'semantic_ctx_{key}_count'] += int(value)
     buf['max_ref_bug_score'] = max(buf['max_ref_bug_score'], ref_bug_score)
@@ -274,7 +297,12 @@ class EvalCollector:
         'tester_bonus': float(tester_bonus),
         'rnd_intrinsic_reward': float(rnd_intrinsic_reward),
         'fault_episode': int(fault_episode),
+        'fault_exists_episode': int(fault_exists_episode),
         'fault_applied': int(fault_applied),
+        'fault_manifested': int(fault_manifested),
+        'fault_trigger_context': int(fault_trigger_context),
+        'lowlevel_trigger_context': int(lowlevel_trigger_context),
+        'fault_manifest_prob': float(fault_manifest_prob),
         'semantic_fault_episode': int(semantic_fault_episode),
         'semantic_fault_applied': int(semantic_fault_applied),
         'semantic_trigger_context': int(semantic_trigger_context),
@@ -304,9 +332,12 @@ class EvalCollector:
     if len(step_df) == 0:
       ep_df = pd.DataFrame(columns=[
           'split', 'episode_id', 'episode_score', 'length', 'fault_episode',
-          'episode_training_reward', 'episode_tester_bonus',
-          'episode_rnd_intrinsic_reward', 'fault_applied_count',
+          'fault_exists_episode', 'episode_training_reward',
+          'episode_tester_bonus', 'episode_rnd_intrinsic_reward',
+          'fault_applied_count', 'fault_manifested_count',
+          'fault_trigger_context_count', 'lowlevel_trigger_context_count',
           'semantic_fault_applied_count', 'semantic_trigger_context_count',
+          'fault_manifest_prob_max',
           'max_ref_bug_score', 'max_ref_bug_kl',
           'max_fault_score', 'max_latent_kl_surprise',
       ])
@@ -320,7 +351,12 @@ class EvalCollector:
         'rnd_intrinsic_reward': 'sum',
         'episode_step': 'max',
         'fault_episode': 'max',
+        'fault_exists_episode': 'max',
         'fault_applied': 'sum',
+        'fault_manifested': 'sum',
+        'fault_trigger_context': 'sum',
+        'lowlevel_trigger_context': 'sum',
+        'fault_manifest_prob': 'max',
         'semantic_fault_applied': 'sum',
         'semantic_trigger_context': 'sum',
         'fault_score': 'max',
@@ -348,6 +384,10 @@ class EvalCollector:
             'rnd_intrinsic_reward': 'episode_rnd_intrinsic_reward',
             'episode_step': 'length',
             'fault_applied': 'fault_applied_count',
+            'fault_manifested': 'fault_manifested_count',
+            'fault_trigger_context': 'fault_trigger_context_count',
+            'lowlevel_trigger_context': 'lowlevel_trigger_context_count',
+            'fault_manifest_prob': 'fault_manifest_prob_max',
             'semantic_fault_applied': 'semantic_fault_applied_count',
             'semantic_trigger_context': 'semantic_trigger_context_count',
             'fault_score': 'max_fault_score',
@@ -375,8 +415,12 @@ def configure_split_env(split_name, outdir):
   os.environ['CRAFTER_USE_RND'] = os.getenv('TESTER_EVAL_CRAFTER_USE_RND', '0')
   os.environ['CRAFTER_RND_UPDATE'] = os.getenv(
       'TESTER_EVAL_CRAFTER_RND_UPDATE', '0')
+  if os.getenv('TESTER_EVAL_FAULT_FREQ_TIER'):
+    os.environ['CRAFTER_FAULT_FREQ_TIER'] = os.getenv(
+        'TESTER_EVAL_FAULT_FREQ_TIER')
   os.environ['CRAFTER_SEMANTIC_FAULT_SAMPLER'] = '0'
   os.environ['CRAFTER_SEMANTIC_FAULT_EP_PROB'] = '0.0'
+  os.environ['CRAFTER_SEMANTIC_FAULT_MANIFEST_PROB'] = '0.0'
   os.environ.pop('CRAFTER_SEMANTIC_FAULT_PROFILE', None)
   os.environ.pop('CRAFTER_SEMANTIC_SUBTYPES', None)
 
@@ -404,6 +448,8 @@ def configure_split_env(split_name, outdir):
         'TESTER_EVAL_SEMANTIC_FAULT_PROFILE', 'eval_holdout')
     os.environ['CRAFTER_SEMANTIC_FAULT_EP_PROB'] = os.getenv(
         'TESTER_EVAL_SEMANTIC_FAULT_EP_PROB', '0.5')
+    os.environ['CRAFTER_SEMANTIC_FAULT_MANIFEST_PROB'] = os.getenv(
+        'TESTER_EVAL_SEMANTIC_FAULT_MANIFEST_PROB', '1.0')
     os.environ['CRAFTER_SEMANTIC_SUBTYPES'] = os.getenv(
         'TESTER_EVAL_SEMANTIC_SUBTYPES',
         DEFAULT_SEMANTIC_HOLDOUT_SUBTYPES)
@@ -490,6 +536,40 @@ def compute_detection_metrics(step_df, ep_df, threshold):
   result['threshold'] = float(threshold)
   result['step_fault_applied_rate'] = float(np.mean(y_true))
   result['step_alarm_rate'] = float(np.mean(y_pred))
+
+  label_cols = (
+      'fault_manifested',
+      'fault_trigger_context',
+      'lowlevel_trigger_context',
+      'semantic_trigger_context',
+      'fault_exists_episode',
+  )
+  for col in label_cols:
+    if col not in step_df:
+      continue
+    label = pd.to_numeric(
+        step_df[col], errors='coerce').fillna(0).astype(int).values
+    result[f'{col}_step_rate'] = float(np.mean(label))
+    result[f'{col}_step_count'] = int(np.sum(label))
+    if len(np.unique(label)) > 1:
+      if _HAVE_SKLEARN:
+        result[f'{col}_auroc'] = float(roc_auc_score(label, y_score))
+        result[f'{col}_auprc'] = float(average_precision_score(label, y_score))
+      else:
+        result[f'{col}_auroc'] = _fallback_auroc(label, y_score)
+        result[f'{col}_auprc'] = _fallback_average_precision(label, y_score)
+      tp = int(((label == 1) & (y_pred == 1)).sum())
+      fp = int(((label == 0) & (y_pred == 1)).sum())
+      fn = int(((label == 1) & (y_pred == 0)).sum())
+      prec = tp / max(tp + fp, 1)
+      rec = tp / max(tp + fn, 1)
+      result[f'{col}_threshold_precision'] = float(prec)
+      result[f'{col}_threshold_recall'] = float(rec)
+    else:
+      result[f'{col}_auroc'] = np.nan
+      result[f'{col}_auprc'] = np.nan
+      result[f'{col}_threshold_precision'] = np.nan
+      result[f'{col}_threshold_recall'] = np.nan
 
   if y_true.sum() > 0:
     tp = int(((y_true == 1) & (y_pred == 1)).sum())
@@ -587,6 +667,18 @@ def compute_detection_metrics(step_df, ep_df, threshold):
           float(clean_eps['episode_training_reward'].mean()) if len(clean_eps) else np.nan)
       result['fault_training_reward_mean'] = (
           float(fault_eps['episode_training_reward'].mean()) if len(fault_eps) else np.nan)
+    for col in (
+        'fault_exists_episode',
+        'fault_manifested_count',
+        'fault_trigger_context_count',
+        'lowlevel_trigger_context_count',
+        'fault_manifest_prob_max',
+    ):
+      if col in ep_df:
+        values = pd.to_numeric(ep_df[col], errors='coerce').fillna(0.0)
+        result[f'{col}_episode_mean'] = float(values.mean())
+        if col.endswith('_count'):
+          result[f'{col}_episode_rate'] = float((values > 0).mean())
     if 'max_fault_score' in ep_df:
       result['max_fault_score_mean'] = float(ep_df['max_fault_score'].mean())
       result['max_latent_kl_surprise_mean'] = float(
@@ -658,14 +750,41 @@ def trace_subtype_summary(trace_path):
   if 'fault_type' not in trace_df.columns:
     return {}
 
-  applied = trace_df[trace_df['fault_applied'] == 1]
+  def series(name, fallback=None, default=0.0):
+    if name in trace_df.columns:
+      return trace_df[name]
+    if fallback and fallback in trace_df.columns:
+      return trace_df[fallback]
+    return pd.Series(default, index=trace_df.index)
+
+  manifested = pd.to_numeric(
+      series('fault_manifested', fallback='fault_applied'),
+      errors='coerce').fillna(0).astype(int)
+  trigger = pd.to_numeric(
+      series('fault_trigger_context'),
+      errors='coerce').fillna(0).astype(int)
+  exists_episode = pd.to_numeric(
+      series('fault_exists_episode', fallback='fault_episode'),
+      errors='coerce').fillna(0).astype(int)
+  applied = trace_df[manifested == 1]
   subtype_counts = applied['fault_type'].value_counts().to_dict()
   family_counts = applied['fault_family'].value_counts().to_dict()
+  manifest_prob = pd.to_numeric(
+      series('fault_manifest_prob'),
+      errors='coerce').fillna(0.0)
+  fault_episode = pd.to_numeric(
+      series('fault_episode'), errors='coerce').fillna(0).astype(int)
+  fault_applied = pd.to_numeric(
+      series('fault_applied'), errors='coerce').fillna(0).astype(int)
 
   return {
       'trace_rows': int(len(trace_df)),
-      'trace_fault_episode_rate': float(pd.to_numeric(trace_df['fault_episode'], errors='coerce').fillna(0).mean()),
-      'trace_fault_applied_rate': float(pd.to_numeric(trace_df['fault_applied'], errors='coerce').fillna(0).mean()),
+      'trace_fault_episode_rate': float(fault_episode.mean()),
+      'trace_fault_applied_rate': float(fault_applied.mean()),
+      'trace_fault_exists_episode_rate': float(exists_episode.mean()),
+      'trace_fault_trigger_context_rate': float(trigger.mean()),
+      'trace_fault_manifested_rate': float(manifested.mean()),
+      'trace_fault_manifest_prob_mean': float(manifest_prob.mean()),
       'trace_fault_type_counts': subtype_counts,
       'trace_fault_family_counts': family_counts,
   }

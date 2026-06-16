@@ -16,6 +16,7 @@ EVAL_STEPS="${EVAL_STEPS:-300000}"
 THRESH_Q="${THRESH_Q:-0.99}"
 EVAL_SPLITS="${EVAL_SPLITS:-clean,seen,holdout,semantic_holdout}"
 RESUME_EXISTING="${RESUME_EXISTING:-0}"
+SEMANTIC_MANIFEST_PROB="${SEMANTIC_MANIFEST_PROB:-${TESTER_EVAL_SEMANTIC_FAULT_MANIFEST_PROB:-1.0}}"
 
 SEMANTIC_SUBTYPES="${SEMANTIC_SUBTYPES:-tool_collect_desync_on_upgrade,craft_result_missing_on_retry,station_place_ghost_on_relocate,achievement_unlock_missing_after_valid_progress,station_usable_flag_broken_after_relocate,recipe_precondition_mischeck_on_retry,delayed_inventory_desync_after_station_use}"
 
@@ -91,6 +92,7 @@ run_tester_eval() {
   TESTER_EVAL_SPLITS="$EVAL_SPLITS" \
   TESTER_EVAL_RESUME_EXISTING="$RESUME_EXISTING" \
   TESTER_EVAL_SEMANTIC_FAULT_EP_PROB="${TESTER_EVAL_SEMANTIC_FAULT_EP_PROB:-0.5}" \
+  TESTER_EVAL_SEMANTIC_FAULT_MANIFEST_PROB="$SEMANTIC_MANIFEST_PROB" \
   TESTER_EVAL_SEMANTIC_SUBTYPES="$SEMANTIC_SUBTYPES" \
   env -u LD_LIBRARY_PATH "$PYTHON_BIN" "$MAIN_PY" \
     --script tester_eval \
@@ -117,6 +119,7 @@ echo "followup root : $FOLLOWUP_ROOT"
 echo "eval steps    : $EVAL_STEPS"
 echo "splits        : $EVAL_SPLITS"
 echo "resume existing: $RESUME_EXISTING"
+echo "semantic manifest prob: $SEMANTIC_MANIFEST_PROB"
 echo "semantic types: $SEMANTIC_SUBTYPES"
 echo "stop on fail : $STOP_ON_FAIL"
 echo "===================================================="

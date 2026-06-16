@@ -20,6 +20,7 @@ CHECK_INTERVAL="${CHECK_INTERVAL:-300}"
 
 RUN_SEMANTIC_PROB1="${RUN_SEMANTIC_PROB1:-1}"
 RUN_SEMANTIC_TRAIN_PROBE="${RUN_SEMANTIC_TRAIN_PROBE:-1}"
+RUN_SEMANTIC_TRIGGER_ONLY="${RUN_SEMANTIC_TRIGGER_ONLY:-0}"
 RUN_CLEAN_LONG="${RUN_CLEAN_LONG:-1}"
 
 SEMANTIC_HOLDOUT_SUBTYPES="${SEMANTIC_HOLDOUT_SUBTYPES:-tool_collect_desync_on_upgrade,craft_result_missing_on_retry,station_place_ghost_on_relocate,achievement_unlock_missing_after_valid_progress,station_usable_flag_broken_after_relocate,recipe_precondition_mischeck_on_retry,delayed_inventory_desync_after_station_use}"
@@ -110,6 +111,7 @@ echo "current root      : $CURRENT_ROOT"
 echo "probe eval steps  : $PROBE_EVAL_STEPS"
 echo "clean eval steps  : $CLEAN_EVAL_STEPS"
 echo "wait current      : $WAIT_FOR_CURRENT"
+echo "trigger-only eval : $RUN_SEMANTIC_TRIGGER_ONLY"
 echo "===================================================="
 
 wait_for_current_queue
@@ -119,6 +121,7 @@ if [[ "$RUN_SEMANTIC_PROB1" == "1" ]]; then
     EVAL_STEPS="$PROBE_EVAL_STEPS" \
     EVAL_SPLITS="clean,semantic_holdout" \
     TESTER_EVAL_SEMANTIC_FAULT_EP_PROB="1.0" \
+    SEMANTIC_MANIFEST_PROB="1.0" \
     SEMANTIC_SUBTYPES="$SEMANTIC_HOLDOUT_SUBTYPES" \
     RESUME_EXISTING="1"
 fi
@@ -129,7 +132,18 @@ if [[ "$RUN_SEMANTIC_TRAIN_PROBE" == "1" ]]; then
     EVAL_SPLITS="clean,semantic_holdout" \
     TESTER_EVAL_SEMANTIC_FAULT_PROFILE="train" \
     TESTER_EVAL_SEMANTIC_FAULT_EP_PROB="1.0" \
+    SEMANTIC_MANIFEST_PROB="1.0" \
     SEMANTIC_SUBTYPES="$SEMANTIC_TRAIN_SUBTYPES" \
+    RESUME_EXISTING="1"
+fi
+
+if [[ "$RUN_SEMANTIC_TRIGGER_ONLY" == "1" ]]; then
+  run_queue "03b_semantic_trigger_only_prob0" \
+    EVAL_STEPS="$PROBE_EVAL_STEPS" \
+    EVAL_SPLITS="clean,semantic_holdout" \
+    TESTER_EVAL_SEMANTIC_FAULT_EP_PROB="1.0" \
+    SEMANTIC_MANIFEST_PROB="0.0" \
+    SEMANTIC_SUBTYPES="$SEMANTIC_HOLDOUT_SUBTYPES" \
     RESUME_EXISTING="1"
 fi
 

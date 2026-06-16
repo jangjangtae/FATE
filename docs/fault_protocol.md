@@ -55,6 +55,20 @@ rebuilt, reapply that patch or vendor the Crafter environment into the repo.
   is meaningful even if the manifestation is stochastic.
 - Realistic sparse: use only for final evaluation, not for reward tuning.
 
+## Sanity Eval
+
+Before long runs, execute the short protocol queue:
+
+```bash
+ROOT=/home/railab/logdir/fault_protocol_sanity_$(date +%Y%m%d_%H%M%S) \
+EVAL_STEPS=10000 \
+./dreamerv3/run_fault_protocol_sanity_eval.sh
+```
+
+It runs clean, forced-manifestation, trigger-only, and benchmark-stochastic
+semantic evals, then writes analysis CSVs under `$ROOT/analysis`. On machines
+without a visible CUDA backend, add `JAX_PLATFORM=cpu` for a slow wiring check.
+
 ## Reporting
 
 Report task score and bug discovery together:
