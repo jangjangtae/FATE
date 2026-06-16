@@ -63,6 +63,7 @@ def main(argv=None):
       consec_train=config.consec_train,
       consec_report=config.consec_report,
       replay_context=config.replay_context,
+      fault=config.fault,
   )
 
   if config.script == 'train':
@@ -91,6 +92,14 @@ def main(argv=None):
         bind(make_env, config),
         bind(make_logger, config),
         args)
+  
+  elif config.script == 'tester_eval':
+    embodied.run.tester_eval(
+      bind(make_agent, config),
+      bind(make_env, config),
+      bind(make_logger, config),
+      args)
+
 
   elif config.script == 'parallel':
     embodied.run.parallel.combined(
@@ -120,6 +129,15 @@ def main(argv=None):
         bind(make_stream, config),
         args)
 
+  elif config.script == 'tester_train':
+    embodied.run.tester_train(
+        bind(make_agent, config),
+        bind(make_replay, config, 'replay'),
+        bind(make_env, config),
+        bind(make_stream, config),
+        bind(make_logger, config),
+        args)
+
   else:
     raise NotImplementedError(config.script)
 
@@ -144,6 +162,7 @@ def make_agent(config):
       batch_length=config.batch_length,
       replay_context=config.replay_context,
       report_length=config.report_length,
+      fault=config.fault,
       replica=config.replica,
       replicas=config.replicas,
   ))

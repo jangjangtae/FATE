@@ -10,6 +10,7 @@ import ninjax as nj
 import numpy as np
 import optax
 
+from . import fault_score
 from . import rssm
 
 f32 = jnp.float32
@@ -35,9 +36,16 @@ class Agent(embodied.jax.Agent):
     self.act_space = act_space
     self.config = config
 
-    exclude = ('is_first', 'is_last', 'is_terminal', 'reward')
+    # reward / terminal / first-last flags는 제외
+    # 추가로 log/* 키들도 encoder/decoder 입력에서 제외해서
+    # fault label 누수를 막는다.
+    exclude_base = ('is_first', 'is_last', 'is_terminal', 'reward')
+    exclude_logs = tuple(k for k in obs_space if k.startswith('log/'))
+    exclude = exclude_base + exclude_logs
+
     enc_space = {k: v for k, v in obs_space.items() if k not in exclude}
     dec_space = {k: v for k, v in obs_space.items() if k not in exclude}
+
     self.enc = {
         'simple': rssm.Encoder,
     }[config.enc.typ](enc_space, **config.enc[config.enc.typ], name='enc')
@@ -84,7 +92,8 @@ class Agent(embodied.jax.Agent):
 
   @property
   def policy_keys(self):
-    return '^(enc|dyn|dec|pol)/'
+    # bug score 계산을 위해 rew / con도 policy-time에 접근 가능해야 한다.
+    return '^(enc|dyn|dec|pol|rew|con)/'
 
   @property
   def ext_space(self):
@@ -112,6 +121,74 @@ class Agent(embodied.jax.Agent):
   def init_report(self, batch_size):
     return self.init_policy(batch_size)
 
+  # --------------------------------------------------
+  # Bug score helper
+  # --------------------------------------------------
+  def _reduce_metric(self, x):
+    x = nn.cast(x)
+    if hasattr(x, 'ndim') and x.ndim > 1:
+      axes = tuple(range(1, x.ndim))
+      return x.mean(axes)
+    return x
+
+  def _bug_metrics(self, feat, obs):
+    """
+    Step-level anomaly signals.
+      - reward prediction error
+      - continue prediction error
+      - KL mismatch using prior_logit vs posterior logit
+    """
+    inp = self.feat2tensor(feat)
+
+    # 1) reward mismatch
+    rew_pred = self.rew(inp, 1).pred()
+    reward_true = nn.cast(obs['reward'])
+    reward_err = jnp.abs(rew_pred - reward_true)
+    reward_err = self._reduce_metric(reward_err)
+
+    # 2) continue mismatch
+    con_pred = self.con(inp, 1).prob(1)
+    con_true = nn.cast(~obs['is_terminal'])
+    continue_err = jnp.abs(con_pred - con_true)
+    continue_err = self._reduce_metric(continue_err)
+
+    # 3) KL / dynamics mismatch
+    kl_score = jnp.zeros_like(reward_err)
+    try:
+      if ('prior_logit' in feat) and ('logit' in feat):
+        prior = feat['prior_logit']
+        post = feat['logit']
+
+        dyn_kl = self.dyn._dist(jax.lax.stop_gradient(post)).kl(self.dyn._dist(prior))
+        rep_kl = self.dyn._dist(post).kl(self.dyn._dist(jax.lax.stop_gradient(prior)))
+        kl_score = self._reduce_metric(dyn_kl + rep_kl)
+    except Exception:
+      kl_score = jnp.zeros_like(reward_err)
+
+    bug_score = kl_score + 1.0 * reward_err + 0.5 * continue_err
+
+    out = {
+        'score': bug_score,
+        'kl': kl_score,
+        'reward_err': reward_err,
+        'continue_err': continue_err,
+        'reward_pred': self._reduce_metric(rew_pred),
+        'continue_pred': self._reduce_metric(con_pred),
+    }
+
+    # fault label은 입력이 아니라 output/평가 라벨로만 유지
+    if 'log/fault_applied' in obs:
+      out['fault_applied'] = nn.cast(obs['log/fault_applied'])
+
+    return out
+
+  def _fault_config(self):
+    return getattr(self.config, 'fault', None)
+
+  def _fault_metrics(self, feat, obs):
+    return fault_score.agent_fault_metrics(
+        self.dyn, self.rew, self.feat2tensor, feat, obs, self._fault_config())
+
   def policy(self, carry, obs, mode='train'):
     (enc_carry, dyn_carry, dec_carry, prevact) = carry
     kw = dict(training=False, single=True)
@@ -122,12 +199,21 @@ class Agent(embodied.jax.Agent):
     dec_entry = {}
     if dec_carry:
       dec_carry, dec_entry, recons = self.dec(dec_carry, feat, reset, **kw)
+
     policy = self.pol(self.feat2tensor(feat), bdims=1)
     act = sample(policy)
+
     out = {}
     out['finite'] = elements.tree.flatdict(jax.tree.map(
         lambda x: jnp.isfinite(x).all(range(1, x.ndim)),
         dict(obs=obs, carry=carry, tokens=tokens, feat=feat, act=act)))
+
+    # step-level bug metrics
+    bug = self._bug_metrics(feat, obs)
+    out.update({f'bug/{k}': v for k, v in bug.items()})
+    fault = self._fault_metrics(feat, obs)
+    out.update({f'fault/{k}': v for k, v in fault.items()})
+
     carry = (enc_carry, dyn_carry, dec_carry, act)
     if self.config.replay_context:
       out.update(elements.tree.flatdict(dict(
@@ -148,8 +234,6 @@ class Agent(embodied.jax.Agent):
       assert all(x.shape[:2] == (B, T) for x in updates.values()), (
           (B, T), {k: v.shape for k, v in updates.items()})
       outs['replay'] = updates
-    # if self.config.replay.fracs.priority > 0:
-    #   outs['replay']['priority'] = losses['model']
     carry = (*carry, {k: data[k][:, -1] for k in self.act_space})
     return carry, outs, metrics
 
@@ -167,14 +251,17 @@ class Agent(embodied.jax.Agent):
         dyn_carry, tokens, prevact, reset, training)
     losses.update(los)
     metrics.update(mets)
+
     dec_carry, dec_entries, recons = self.dec(
         dec_carry, repfeat, reset, training)
     inp = sg(self.feat2tensor(repfeat), skip=self.config.reward_grad)
     losses['rew'] = self.rew(inp, 2).loss(obs['reward'])
+
     con = f32(~obs['is_terminal'])
     if self.config.contdisc:
       con *= 1 - 1 / self.config.horizon
     losses['con'] = self.con(self.feat2tensor(repfeat), 2).loss(con)
+
     for key, recon in recons.items():
       space, value = self.obs_space[key], obs[key]
       assert value.dtype == space.dtype, (key, space, value.dtype)
@@ -199,6 +286,7 @@ class Agent(embodied.jax.Agent):
     imgact = concat([imgprevact, lastact], 1)
     assert all(x.shape[:2] == (B * K, H + 1) for x in jax.tree.leaves(imgfeat))
     assert all(x.shape[:2] == (B * K, H + 1) for x in jax.tree.leaves(imgact))
+
     inp = self.feat2tensor(imgfeat)
     los, imgloss_out, mets = imag_loss(
         imgact,
@@ -257,7 +345,7 @@ class Agent(embodied.jax.Agent):
     # Train metrics
     _, (new_carry, entries, outs, mets) = self.loss(
         carry, obs, prevact, training=False)
-    mets.update(mets)
+    metrics.update(mets)
 
     # Grad norms
     if self.config.report_gradnorms:

@@ -1,4 +1,5 @@
 import collections
+import json
 from functools import partial as bind
 
 import elements
@@ -6,13 +7,56 @@ import embodied
 import numpy as np
 
 
+def _filter_transition_for_replay(tran):
+  # agent가 기대하지 않는 auxiliary/debug key 제거
+  drop_prefixes = ('bug/', 'fault/')
+  return {
+      k: v for k, v in tran.items()
+      if not any(k.startswith(prefix) for prefix in drop_prefixes)
+  }
+
+
+def _cfg_get(config, key, default=None):
+  if config is None:
+    return default
+  if hasattr(config, 'get'):
+    return config.get(key, default)
+  return getattr(config, key, default)
+
+
+def _fault_enabled(args):
+  return bool(_cfg_get(getattr(args, 'fault', None), 'enabled', False))
+
+
+def _load_agent_checkpoint(path, agent, regex=None):
+  if regex:
+    elements.checkpoint.load(path, dict(agent=bind(agent.load, regex=regex)))
+  else:
+    elements.checkpoint.load(path, dict(agent=agent.load))
+
+
 def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
 
   agent = make_agent()
+  fault_cfg = getattr(args, 'fault', None)
+  use_fault = _fault_enabled(args)
+  faultlib = None
+  ref_agent = None
+  fault_stats = {}
+  if use_fault:
+    from dreamerv3 import fault_score as faultlib
+    ref_agent = make_agent()
+    fault_stats = faultlib.load_norm_stats(_cfg_get(
+        fault_cfg, 'norm_stats', ''))
   replay = make_replay()
   logger = make_logger()
 
   logdir = elements.Path(args.logdir)
+  fault_trace_path = logdir / _cfg_get(
+      fault_cfg, 'trace', 'fault_score_trace.jsonl')
+  if use_fault:
+    with open(str(fault_trace_path), 'a', encoding='utf-8') as f:
+      pass
   step = logger.step
   usage = elements.Usage(**args.usage)
   train_agg = elements.Agg()
@@ -20,6 +64,8 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
   episodes = collections.defaultdict(elements.Agg)
   policy_fps = elements.FPS()
   train_fps = elements.FPS()
+  fault_episode_id = collections.defaultdict(int)
+  fault_episode_step = collections.defaultdict(int)
 
   batch_steps = args.batch_size * args.batch_length
   should_train = elements.when.Ratio(args.train_ratio / batch_steps)
@@ -54,11 +100,57 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
         result['reward_rate'] = (np.abs(rew[1:] - rew[:-1]) >= 0.01).mean()
       epstats.add(result)
 
+  @elements.timer.section('fault_score')
+  def apply_fault_score(tran, worker):
+    if not use_fault:
+      return
+    result = faultlib.compute_transition_fault(
+        tran, fault_cfg, fault_stats, force_log_only=False)
+    faultlib.add_transition_fault_logs(tran, result)
+    if not _cfg_get(fault_cfg, 'log_only', True):
+      tran['reward'] = np.float32(result['augmented_reward'])
+
+  @elements.timer.section('fault_trace')
+  def write_fault_trace(tran, worker):
+    if not use_fault:
+      return
+    if tran['is_first']:
+      fault_episode_id[worker] += 1
+      fault_episode_step[worker] = 0
+    fault_episode_step[worker] += 1
+    record = faultlib.trace_record(
+        tran, int(step), worker, fault_episode_id[worker],
+        fault_episode_step[worker])
+    with open(str(fault_trace_path), 'a', encoding='utf-8') as f:
+      f.write(json.dumps(record) + '\n')
+
+  def init_policy(batch_size):
+    if not use_fault:
+      return agent.init_policy(batch_size)
+    return {
+        'agent': agent.init_policy(batch_size),
+        'ref': ref_agent.init_policy(batch_size),
+    }
+
+  def policy(carry, obs, mode='train'):
+    if not use_fault:
+      return agent.policy(carry, obs, mode=mode)
+    agent_carry, acts, outs = agent.policy(carry['agent'], obs, mode=mode)
+    ref_carry, _, ref_outs = ref_agent.policy(carry['ref'], obs, mode='eval')
+    # Align the frozen reference prior with the action that actually enters env.
+    ref_carry = (*ref_carry[:-1], agent_carry[-1])
+    outs = dict(outs)
+    faultlib.add_reference_outputs(outs, ref_outs)
+    return {'agent': agent_carry, 'ref': ref_carry}, acts, outs
+
   fns = [bind(make_env, i) for i in range(args.envs)]
   driver = embodied.Driver(fns, parallel=not args.debug)
   driver.on_step(lambda tran, _: step.increment())
   driver.on_step(lambda tran, _: policy_fps.step())
-  driver.on_step(replay.add)
+  driver.on_step(apply_fault_score)
+  driver.on_step(write_fault_trace)
+  driver.on_step(lambda tran, _: replay.add(_filter_transition_for_replay(tran)))
+
   driver.on_step(logfn)
 
   stream_train = iter(agent.stream(make_stream(replay, 'train')))
@@ -84,17 +176,25 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
   cp.step = step
   cp.agent = agent
   cp.replay = replay
+  load_regex = args.from_checkpoint_regex if hasattr(args, 'from_checkpoint_regex') else None
   if args.from_checkpoint:
-    elements.checkpoint.load(args.from_checkpoint, dict(
-        agent=bind(agent.load, regex=args.from_checkpoint_regex)))
+    _load_agent_checkpoint(args.from_checkpoint, agent, load_regex)
+  if use_fault:
+    ref_ckpt = _cfg_get(fault_cfg, 'ref_ckpt', '') or args.from_checkpoint
+    assert ref_ckpt, 'fault.ref_ckpt 또는 run.from_checkpoint가 필요합니다.'
+    _load_agent_checkpoint(ref_ckpt, ref_agent, load_regex)
   cp.load_or_save()
 
   print('Start training loop')
-  policy = lambda *args: agent.policy(*args, mode='train')
-  driver.reset(agent.init_policy)
+  if use_fault:
+    print('Fault score enabled')
+    print('Fault reference checkpoint:', _cfg_get(fault_cfg, 'ref_ckpt', '') or args.from_checkpoint)
+    print('Fault trace file:', fault_trace_path)
+  train_policy = lambda *args: policy(*args, mode='train')
+  driver.reset(init_policy)
   while step < args.steps:
 
-    driver(policy, steps=10)
+    driver(train_policy, steps=10)
 
     if should_report(step) and len(replay):
       agg = elements.Agg()

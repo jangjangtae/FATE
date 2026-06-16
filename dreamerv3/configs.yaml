@@ -29,7 +29,7 @@ defaults:
   env:
     atari: {size: [96, 96], repeat: 4, sticky: True, gray: True, actions: all, lives: unused, noops: 30, autostart: False, pooling: 2, aggregate: max, resize: pillow, clip_reward: False}
     procgen: {size: [96, 96], resize: pillow}
-    crafter: {size: [64, 64], logs: False}
+    crafter: {size: [64, 64], logs: False, use_logdir: True}
     atari100k: {size: [64, 64], repeat: 4, sticky: False, gray: False, actions: needed, lives: unused, noops: 30, autostart: False, resize: pillow, clip_reward: False}
     dmlab: {size: [64, 64], repeat: 4, episodic: True, use_seed: True}
     minecraft: {size: [64, 64], break_speed: 100.0, logs: False, length: 36000}
@@ -44,6 +44,28 @@ defaults:
     priosignal: model
     recexp: 1.0
     chunksize: 1024
+
+  fault:
+    enabled: False
+    ref_ckpt: ''
+    norm_stats: ''
+    beta: 0.1
+    clip: 1.0
+    use_latent_kl: True
+    use_reward_error: True
+    use_recon_error: False
+    log_only: True
+    w_kl: 1.0
+    w_reward: 1.0
+    norm_mode: p95
+    reward_gate: none
+    trace: fault_score_trace.jsonl
+
+  calibration:
+    episodes: 100
+    steps: 0
+    out: ''
+    trace: ''
 
   run:
     steps: 1e10

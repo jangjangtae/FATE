@@ -12,6 +12,11 @@ import portal
 prefix = lambda d, p: {f'{p}/{k}': v for k, v in d.items()}
 
 
+def filter_transition_for_replay(tran):
+  drop_prefixes = ('bug/', 'fault/')
+  return {k: v for k, v in tran.items() if not k.startswith(drop_prefixes)}
+
+
 def combined(
     make_agent,
     make_replay_train,
@@ -111,7 +116,7 @@ def parallel_actor(agent, barrier, args):
   def postfn(trans):
     logs = {k: v for k, v in trans.items() if k.startswith('log/')}
     trans = {k: v for k, v in trans.items() if not k.startswith('log/')}
-    replay.add_batch(trans)
+    replay.add_batch(filter_transition_for_replay(trans))
     logger.tran({**trans, **logs})
     if should_log():
       stats = {}
@@ -248,6 +253,7 @@ def parallel_replay(make_replay_train, make_replay_eval, make_stream, args):
     active.increment()
     for i, envid in enumerate(data.pop('envid')):
       tran = {k: v[i] for k, v in data.items()}
+      tran = filter_transition_for_replay(tran)
       if tran.pop('is_eval', False):
         replay_eval.add(tran, envid)
         continue

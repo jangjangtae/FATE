@@ -6,6 +6,11 @@ import embodied
 import numpy as np
 
 
+def _filter_transition_for_replay(tran):
+  drop_prefixes = ('bug/', 'fault/')
+  return {k: v for k, v in tran.items() if not k.startswith(drop_prefixes)}
+
+
 def train_eval(
     make_agent,
     make_replay_train,
@@ -73,12 +78,16 @@ def train_eval(
   driver_train = embodied.Driver(fns, parallel=(not args.debug))
   driver_train.on_step(lambda tran, _: step.increment())
   driver_train.on_step(lambda tran, _: policy_fps.step())
-  driver_train.on_step(replay_train.add)
+  driver_train.on_step(
+      lambda tran, worker: replay_train.add(
+          _filter_transition_for_replay(tran), worker))
   driver_train.on_step(bind(logfn, mode='train'))
 
   fns = [bind(make_env_eval, i) for i in range(args.eval_envs)]
   driver_eval = embodied.Driver(fns, parallel=(not args.debug))
-  driver_eval.on_step(replay_eval.add)
+  driver_eval.on_step(
+      lambda tran, worker: replay_eval.add(
+          _filter_transition_for_replay(tran), worker))
   driver_eval.on_step(bind(logfn, mode='eval'))
   driver_eval.on_step(lambda tran, _: policy_fps.step())
 
