@@ -106,6 +106,13 @@ PARETO_OBJECTIVES = {
 BASELINE_RUNS = ('task_only_repeat', 'task_only', 'reference')
 COMPETENCE_THRESHOLDS = (0.9, 0.8)
 
+TRACE_LABELS = [
+    ('fault_manifested', 'fault_manifested'),
+    ('fault_trigger_context', 'fault_trigger_context'),
+    ('semantic_trigger_context', 'semantic_trigger_context'),
+    ('legacy_fault_applied', 'fault_applied'),
+]
+
 
 def parse_args():
   parser = argparse.ArgumentParser()
@@ -727,11 +734,26 @@ def load_step_records(path):
       if not line.strip():
         continue
       row = json.loads(line)
+      fault_applied = int(float(row.get('fault_applied', 0)) > 0.5)
+      fault_manifested = int(float(row.get(
+          'fault_manifested', fault_applied)) > 0.5)
+      fault_trigger_context = int(float(row.get(
+          'fault_trigger_context', fault_manifested)) > 0.5)
+      semantic_trigger_context = int(float(row.get(
+          'semantic_trigger_context', 0)) > 0.5)
       records.append({
           'episode_id': int(row.get('episode_id', 0)),
           'episode_step': int(row.get('episode_step', 0)),
-          'fault_applied': int(float(row.get('fault_applied', 0)) > 0.5),
+          'fault_applied': fault_applied,
+          'fault_manifested': fault_manifested,
+          'fault_trigger_context': fault_trigger_context,
+          'semantic_trigger_context': semantic_trigger_context,
+          'lowlevel_trigger_context': int(float(row.get(
+              'lowlevel_trigger_context', 0)) > 0.5),
           'fault_episode': int(float(row.get('fault_episode', 0)) > 0.5),
+          'fault_exists_episode': int(float(row.get(
+              'fault_exists_episode', row.get('fault_episode', 0))) > 0.5),
+          'fault_manifest_prob': float(row.get('fault_manifest_prob', 0.0)),
           'fault_score': float(row.get('fault_score', row.get('ref_bug_score', 0.0))),
           'latent_kl_surprise': float(row.get('latent_kl_surprise', row.get('ref_bug_kl', 0.0))),
           'reward_prediction_error': float(row.get('reward_prediction_error', 0.0)),
@@ -754,42 +776,49 @@ def trace_analysis(paths, splits, top_fracs, window):
       if not records:
         continue
 
-      y_true = np.asarray([r['fault_applied'] for r in records], dtype=np.int32)
       scores = np.asarray([r['fault_score'] for r in records], dtype=np.float64)
-      pos = scores[y_true == 1]
-      neg = scores[y_true == 0]
+      for label, key in TRACE_LABELS:
+        y_true = np.asarray([r.get(key, 0) for r in records], dtype=np.int32)
+        pos = scores[y_true == 1]
+        neg = scores[y_true == 0]
 
-      row = {
-          **info,
-          'split': split,
-          'n_steps': int(len(records)),
-          'n_fault_steps': int(y_true.sum()),
-          'fault_step_rate': float(y_true.mean()) if len(y_true) else '',
-          'score_mean_all': float(scores.mean()) if len(scores) else '',
-          'score_mean_fault': float(pos.mean()) if len(pos) else '',
-          'score_mean_normal': float(neg.mean()) if len(neg) else '',
-          'score_p95_fault': float(np.quantile(pos, 0.95)) if len(pos) else '',
-          'score_p95_normal': float(np.quantile(neg, 0.95)) if len(neg) else '',
-          'score_p99_fault': float(np.quantile(pos, 0.99)) if len(pos) else '',
-          'score_p99_normal': float(np.quantile(neg, 0.99)) if len(neg) else '',
-          'auroc_from_steps': fallback_auroc(y_true, scores),
-          'auprc_from_steps': fallback_average_precision(y_true, scores),
-      }
+        row = {
+            **info,
+            'split': split,
+            'label': label,
+            'n_steps': int(len(records)),
+            'n_fault_steps': int(y_true.sum()),
+            'fault_step_rate': float(y_true.mean()) if len(y_true) else '',
+            'score_mean_all': float(scores.mean()) if len(scores) else '',
+            'score_mean_fault': float(pos.mean()) if len(pos) else '',
+            'score_mean_normal': float(neg.mean()) if len(neg) else '',
+            'score_p95_fault': float(np.quantile(pos, 0.95)) if len(pos) else '',
+            'score_p95_normal': float(np.quantile(neg, 0.95)) if len(neg) else '',
+            'score_p99_fault': float(np.quantile(pos, 0.99)) if len(pos) else '',
+            'score_p99_normal': float(np.quantile(neg, 0.99)) if len(neg) else '',
+            'auroc_from_steps': fallback_auroc(y_true, scores),
+            'auprc_from_steps': fallback_average_precision(y_true, scores),
+        }
 
-      order = np.argsort(-scores, kind='mergesort')
-      for frac in top_fracs:
-        k = max(1, int(round(len(order) * frac)))
-        top = y_true[order[:k]]
-        row[f'precision_at_top_{frac:g}'] = float(top.mean()) if len(top) else ''
-        row[f'n_top_{frac:g}'] = int(k)
-      metric_rows.append(row)
+        order = np.argsort(-scores, kind='mergesort')
+        for frac in top_fracs:
+          k = max(1, int(round(len(order) * frac)))
+          top = y_true[order[:k]]
+          row[f'precision_at_top_{frac:g}'] = float(top.mean()) if len(top) else ''
+          row[f'n_top_{frac:g}'] = int(k)
+        metric_rows.append(row)
 
-      window_rows.extend(event_window_rows(info, split, records, window))
+      window_rows.extend(event_window_rows(
+          info, split, records, window, label='fault_manifested',
+          event_key='fault_manifested'))
+      window_rows.extend(event_window_rows(
+          info, split, records, window, label='fault_trigger_context',
+          event_key='fault_trigger_context'))
 
   return metric_rows, window_rows
 
 
-def event_window_rows(info, split, records, window):
+def event_window_rows(info, split, records, window, label, event_key):
   by_ep = {}
   for rec in records:
     by_ep.setdefault(rec['episode_id'], []).append(rec)
@@ -802,7 +831,7 @@ def event_window_rows(info, split, records, window):
     ep_records.sort(key=lambda x: x['episode_step'])
     first_fault_idx = None
     for idx, rec in enumerate(ep_records):
-      if rec['fault_applied']:
+      if rec.get(event_key, 0):
         first_fault_idx = idx
         break
     if first_fault_idx is None:
@@ -822,6 +851,7 @@ def event_window_rows(info, split, records, window):
     rows.append({
         **info,
         'split': split,
+        'event_label': label,
         'relative_step': rel,
         'mean_fault_score': sums[rel] / counts[rel] if counts[rel] else '',
         'n': counts[rel],
@@ -922,7 +952,7 @@ def main():
     metric_rows, window_rows = trace_analysis(
         summary_paths, splits, top_fracs, args.window)
     trace_fields = [
-        'suite', 'run', 'split', 'n_steps', 'n_fault_steps',
+        'suite', 'run', 'split', 'label', 'n_steps', 'n_fault_steps',
         'fault_step_rate', 'score_mean_all', 'score_mean_fault',
         'score_mean_normal', 'score_p95_fault', 'score_p95_normal',
         'score_p99_fault', 'score_p99_normal', 'auroc_from_steps',
@@ -935,7 +965,7 @@ def main():
     write_csv(
         outdir / 'event_window_fault_score.csv',
         window_rows,
-        ['suite', 'run', 'split', 'relative_step', 'mean_fault_score',
+        ['suite', 'run', 'split', 'event_label', 'relative_step', 'mean_fault_score',
          'n', 'n_events', 'raw_eval_name', 'root', 'eval_dir', 'summary_path'])
 
   print(f'Found {len(summary_paths)} summary files.')

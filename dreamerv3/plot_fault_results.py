@@ -287,6 +287,8 @@ def plot_detection_false_alarm(df, outdir, formats):
 
 def plot_trace_precision(trace, outdir, formats, suite):
   df = trace[focus_mask(trace, suite) & (trace["split"].isin(SPLIT_ORDER))].copy()
+  if "label" in df:
+    df = df[df["label"].fillna("fault_manifested").astype(str) == "fault_manifested"]
   df = add_method(df)
   df = df[df["method"].isin(METHOD_ORDER)]
   if df.empty:
@@ -323,6 +325,8 @@ def plot_trace_precision(trace, outdir, formats, suite):
 
 def plot_context_conditioned(context, outdir, formats, suite):
   df = context[focus_mask(context, suite) & (context["split"] == "semantic_holdout")].copy()
+  if "label" in df:
+    df = df[df["label"].fillna("fault_manifested").astype(str) == "fault_manifested"]
   df = add_method(df)
   df = df[df["method"].isin(METHOD_ORDER)]
   df = df[df["condition"].isin(["all", "semantic_context"])]
@@ -363,6 +367,8 @@ def plot_context_conditioned(context, outdir, formats, suite):
 
 def plot_context_breakdown(context, outdir, formats, suite):
   df = context[focus_mask(context, suite) & (context["split"] == "semantic_holdout")].copy()
+  if "label" in df:
+    df = df[df["label"].fillna("fault_manifested").astype(str) == "fault_manifested"]
   df = add_method(df)
   df = df[df["method"].isin(METHOD_ORDER)]
   df = df[df["condition"].str.startswith("ctx_", na=False)]
@@ -400,6 +406,8 @@ def plot_context_breakdown(context, outdir, formats, suite):
 
 def plot_event_window(events, outdir, formats, suite):
   df = events[focus_mask(events, suite) & (events["split"].isin(SPLIT_ORDER))].copy()
+  if "event_label" in df:
+    df = df[df["event_label"].fillna("fault_manifested").astype(str) == "fault_manifested"]
   df = add_method(df)
   df = df[df["method"].isin(METHOD_ORDER)]
   if df.empty:

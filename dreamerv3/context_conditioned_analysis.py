@@ -43,6 +43,9 @@ def parse_args():
   parser.add_argument(
       '--top-fracs', default='0.001,0.005,0.01,0.05',
       help='Comma separated fractions for precision@top-k.')
+  parser.add_argument(
+      '--labels', default='fault_manifested,fault_trigger_context',
+      help='Comma separated label columns to evaluate.')
   return parser.parse_args()
 
 
@@ -137,11 +140,12 @@ def condition_mask(df, name, cols):
   return mask
 
 
-def metrics_for(df, top_fracs):
+def metrics_for(df, top_fracs, label):
   if len(df) == 0:
     return None
   score_col = 'fault_score' if 'fault_score' in df else 'ref_bug_score'
-  y_true = pd.to_numeric(df.get('fault_applied', 0), errors='coerce').fillna(0).astype(int)
+  fallback = df.get('fault_applied', 0)
+  y_true = pd.to_numeric(df.get(label, fallback), errors='coerce').fillna(0).astype(int)
   y_score = pd.to_numeric(df[score_col], errors='coerce').fillna(0.0)
   row = {
       'n_steps': int(len(df)),
@@ -179,6 +183,7 @@ def main():
   args = parse_args()
   splits = [x.strip() for x in args.splits.split(',') if x.strip()]
   top_fracs = [float(x.strip()) for x in args.top_fracs.split(',') if x.strip()]
+  labels = [x.strip() for x in args.labels.split(',') if x.strip()]
   outdir = Path(args.outdir).expanduser()
   outdir.mkdir(parents=True, exist_ok=True)
 
@@ -197,24 +202,26 @@ def main():
       for cond, cols in CONDITIONS.items():
         mask = condition_mask(df, cond, cols)
         sub = df[mask]
-        mets = metrics_for(sub, top_fracs)
-        if mets is None:
-          continue
-        rows.append({
-            'suite': 'semantic_holdout_eval' if 'semantic' in str(eval_dir) else 'eval',
-            'run': infer_run(eval_dir),
-            'split': split,
-            'condition': cond,
-            'raw_eval_name': eval_dir.parent.name,
-            'root': str(root),
-            'eval_dir': str(eval_dir.parent),
-            'summary_path': str(eval_dir / 'summary.json'),
-            'summary_split_auroc': summary.get(split, {}).get('step_auroc', np.nan),
-            **mets,
-        })
+        for label in labels:
+          mets = metrics_for(sub, top_fracs, label)
+          if mets is None:
+            continue
+          rows.append({
+              'suite': 'semantic_holdout_eval' if 'semantic' in str(eval_dir) else 'eval',
+              'run': infer_run(eval_dir),
+              'split': split,
+              'condition': cond,
+              'label': label,
+              'raw_eval_name': eval_dir.parent.name,
+              'root': str(root),
+              'eval_dir': str(eval_dir.parent),
+              'summary_path': str(eval_dir / 'summary.json'),
+              'summary_split_auroc': summary.get(split, {}).get('step_auroc', np.nan),
+              **mets,
+          })
 
   fields = [
-      'suite', 'run', 'split', 'condition', 'n_steps', 'n_fault_steps',
+      'suite', 'run', 'split', 'condition', 'label', 'n_steps', 'n_fault_steps',
       'fault_step_rate', 'score_mean_all', 'score_mean_fault',
       'score_mean_normal', 'score_p95_fault', 'score_p95_normal',
       'score_p99_fault', 'score_p99_normal', 'auroc', 'auprc',
