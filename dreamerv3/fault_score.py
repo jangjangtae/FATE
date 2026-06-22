@@ -45,6 +45,18 @@ BUG_TYPE_NAMES = {
     34: 'delayed_inventory_desync_after_station_use',
 }
 
+REWARD_MODE_IDS = {
+    'dense': 1,
+    'threshold': 2,
+    'binary_threshold': 2,
+    'excess_threshold': 3,
+    'excess': 3,
+    'delta_threshold': 4,
+    'binary_delta_threshold': 4,
+    'excess_delta_threshold': 5,
+    'delta_excess': 5,
+}
+
 
 def _cfg_get(config, key, default=None):
   if config is None:
@@ -163,6 +175,34 @@ def reward_gate_active(tran, config=None):
   raise ValueError(f'Unknown fault reward gate: {mode}')
 
 
+def compute_fault_bonus(
+    normalized, clipped, beta, config=None, score_delta=0.0, eps=1e-8):
+  """Convert a normalized clean-prior score into a policy reward bonus."""
+  mode = str(_cfg_get(config, 'reward_mode', 'dense') or 'dense').lower()
+  threshold = float(_cfg_get(config, 'reward_threshold', 1.0))
+  delta_threshold = float(_cfg_get(config, 'reward_delta_threshold', threshold))
+  clip = float(_cfg_get(config, 'clip', 1.0))
+
+  if mode == 'dense':
+    shaped = clipped
+  elif mode in ('threshold', 'binary_threshold'):
+    shaped = 1.0 if float(normalized) >= threshold else 0.0
+  elif mode in ('excess_threshold', 'excess'):
+    denom = max(float(clip) - threshold, eps)
+    shaped = np.clip((float(normalized) - threshold) / denom, 0.0, 1.0)
+  elif mode in ('delta_threshold', 'binary_delta_threshold'):
+    shaped = 1.0 if float(score_delta) >= delta_threshold else 0.0
+    threshold = delta_threshold
+  elif mode in ('excess_delta_threshold', 'delta_excess'):
+    denom = max(float(clip) - delta_threshold, eps)
+    shaped = np.clip((float(score_delta) - delta_threshold) / denom, 0.0, 1.0)
+    threshold = delta_threshold
+  else:
+    raise ValueError(f'Unknown fault reward mode: {mode}')
+
+  return float(beta * shaped), float(shaped), threshold, REWARD_MODE_IDS.get(mode, 0)
+
+
 def compute_transition_fault(tran, config=None, stats=None, force_log_only=False):
   """Compute normalized fault score and optional reward relabeling for one step."""
   is_first = bool(np.asarray(tran.get('is_first', False)).reshape(()))
@@ -192,12 +232,19 @@ def compute_transition_fault(tran, config=None, stats=None, force_log_only=False
 
   norm_mode = _cfg_get(config, 'norm_mode', 'p95')
   normalized = normalize_score(raw, stats, norm_mode)
+  score_prev = _scalar(tran.get('log/fault_score_prev', 0.0))
+  score_delta = max(0.0, float(normalized) - float(score_prev))
   clip = float(_cfg_get(config, 'clip', 1.0))
   clipped = float(np.clip(normalized, 0.0, clip))
   beta = float(_cfg_get(config, 'beta', 0.1))
   log_only = bool(_cfg_get(config, 'log_only', True)) or force_log_only
   gate_active = reward_gate_active(tran, config)
-  fault_bonus = float(beta * clipped) if gate_active else 0.0
+  fault_bonus, reward_score, reward_threshold, reward_mode_id = (
+      compute_fault_bonus(
+          normalized, clipped, beta, config, score_delta=score_delta))
+  if not gate_active:
+    fault_bonus = 0.0
+    reward_score = 0.0
   if not log_only:
     augmented_reward = raw_reward + fault_bonus
 
@@ -209,10 +256,15 @@ def compute_transition_fault(tran, config=None, stats=None, force_log_only=False
       'reward_pred': float(reward_pred),
       'fault_score_raw': float(raw),
       'fault_score': float(normalized),
+      'fault_score_prev': float(score_prev),
+      'fault_score_delta': float(score_delta),
       'clipped_fault_score': float(clipped),
       'fault_beta': float(beta),
       'fault_reward_gate_active': float(gate_active),
       'fault_reward_bonus': float(fault_bonus),
+      'fault_reward_score': float(reward_score),
+      'fault_reward_threshold': float(reward_threshold),
+      'fault_reward_mode_id': float(reward_mode_id),
   }
 
 
@@ -221,6 +273,8 @@ def add_transition_fault_logs(tran, result):
   tran['log/augmented_reward'] = np.float32(result['augmented_reward'])
   tran['log/fault_score_raw'] = np.float32(result['fault_score_raw'])
   tran['log/fault_score'] = np.float32(result['fault_score'])
+  tran['log/fault_score_prev'] = np.float32(result['fault_score_prev'])
+  tran['log/fault_score_delta'] = np.float32(result['fault_score_delta'])
   tran['log/clipped_fault_score'] = np.float32(result['clipped_fault_score'])
   tran['log/latent_kl_surprise'] = np.float32(result['latent_kl_surprise'])
   tran['log/reward_prediction_error'] = np.float32(
@@ -230,6 +284,11 @@ def add_transition_fault_logs(tran, result):
   tran['log/fault_reward_gate_active'] = np.float32(
       result['fault_reward_gate_active'])
   tran['log/fault_reward_bonus'] = np.float32(result['fault_reward_bonus'])
+  tran['log/fault_reward_score'] = np.float32(result['fault_reward_score'])
+  tran['log/fault_reward_threshold'] = np.float32(
+      result['fault_reward_threshold'])
+  tran['log/fault_reward_mode_id'] = np.float32(
+      result['fault_reward_mode_id'])
 
 
 def add_reference_outputs(outs, ref_outs):
@@ -274,11 +333,19 @@ def trace_record(tran, global_step, worker, episode_id, episode_step):
           'log/augmented_reward', tran.get('reward', 0.0))),
       'fault_score': _scalar(tran.get('log/fault_score', 0.0)),
       'fault_score_raw': _scalar(tran.get('log/fault_score_raw', 0.0)),
+      'fault_score_prev': _scalar(tran.get('log/fault_score_prev', 0.0)),
+      'fault_score_delta': _scalar(tran.get('log/fault_score_delta', 0.0)),
       'clipped_fault_score': _scalar(tran.get('log/clipped_fault_score', 0.0)),
       'fault_reward_gate_active': _scalar(
           tran.get('log/fault_reward_gate_active', 0.0)),
       'fault_reward_bonus': _scalar(
           tran.get('log/fault_reward_bonus', 0.0)),
+      'fault_reward_score': _scalar(
+          tran.get('log/fault_reward_score', 0.0)),
+      'fault_reward_threshold': _scalar(
+          tran.get('log/fault_reward_threshold', 0.0)),
+      'fault_reward_mode_id': int(_scalar(
+          tran.get('log/fault_reward_mode_id', 0.0))),
       'latent_kl_surprise': _scalar(tran.get('log/latent_kl_surprise', 0.0)),
       'reward_prediction_error': _scalar(
           tran.get('log/reward_prediction_error', 0.0)),

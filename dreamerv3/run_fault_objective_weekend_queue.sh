@@ -1,36 +1,39 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-# Focused low-level fault-score adaptation probe.
-# Runs a compact task-only baseline and beta=0.05 fault-score adaptation on
-# low-level Crafter faults, then evaluates clean/seen/holdout splits.
+# Weekend queue for fault-reward objective ablations.
+# Reuses the previous task-only/dense long run as a comparison root and runs
+# threshold-style objectives that should behave less like dense novelty reward.
 
 BASE_ROOT="${BASE_ROOT:-/home/railab/logdir/fault_3day_leave_20260528_170600}"
-ROOT="${ROOT:-$HOME/logdir/fault_lowlevel_adapt_probe_$(date +%Y%m%d_%H%M%S)}"
+COMPARISON_ROOT="${COMPARISON_ROOT:-/home/railab/logdir/fault_profile_long_20260618_134300}"
+REF_PROBE_ROOT="${REF_PROBE_ROOT:-/home/railab/logdir/fault_reference_protocol_probe_20260616_162218}"
+ROOT="${ROOT:-$HOME/logdir/fault_objective_weekend_$(date +%Y%m%d_%H%M%S)}"
 PROJECT_ROOT="${PROJECT_ROOT:-$HOME/dreamerv3}"
-PYTHON_BIN="${PYTHON_BIN:-python}"
+PYTHON_BIN="${PYTHON_BIN:-$PROJECT_ROOT/dreamer_cuda/bin/python}"
 MAIN_PY="$PROJECT_ROOT/dreamerv3/main.py"
 ANALYZE_PY="$PROJECT_ROOT/dreamerv3/analyze_fault_results.py"
+PLOT_PY="$PROJECT_ROOT/dreamerv3/plot_fault_objective_results.py"
 
 REF_CKPT="${REF_CKPT:-/home/railab/logdir/dreamer_clean/20260303T112635/ckpt/20260305T131501F807487}"
-REF_PROBE_ROOT="${REF_PROBE_ROOT:-/home/railab/logdir/fault_reference_protocol_probe_20260616_162218}"
 STATS_FILE="${STATS_FILE:-$BASE_ROOT/calibration/clean_fault_stats.json}"
-TRAIN_STEPS="${TRAIN_STEPS:-100000}"
-EVAL_STEPS="${EVAL_STEPS:-50000}"
+TRAIN_STEPS="${TRAIN_STEPS:-200000}"
+EVAL_STEPS="${EVAL_STEPS:-75000}"
 REPLAY_SIZE="${REPLAY_SIZE:-1e5}"
 THRESH_Q="${THRESH_Q:-0.99}"
-FAULT_CLIP="${FAULT_CLIP:-1.0}"
 EVAL_SPLITS="${EVAL_SPLITS:-clean,seen,holdout}"
 TRAIN_FAULT_EP_PROB="${TRAIN_FAULT_EP_PROB:-0.3}"
 TRAIN_FAULT_PROFILE="${TRAIN_FAULT_PROFILE:-benchmark_train}"
 EVAL_SEEN_FAULT_PROFILE="${EVAL_SEEN_FAULT_PROFILE:-benchmark_seen}"
 EVAL_HOLDOUT_FAULT_PROFILE="${EVAL_HOLDOUT_FAULT_PROFILE:-benchmark_holdout}"
-FAULT_FREQ_TIER="${FAULT_FREQ_TIER:-}"
+FAULT_FREQ_TIER="${FAULT_FREQ_TIER:-benchmark}"
 STOP_ON_FAIL="${STOP_ON_FAIL:-1}"
 
-RUN_TASK_ONLY="${RUN_TASK_ONLY:-1}"
-RUN_BETA005="${RUN_BETA005:-1}"
-RUN_BETA01="${RUN_BETA01:-0}"
+RUN_THRESH_P95="${RUN_THRESH_P95:-1}"
+RUN_THRESH_P99="${RUN_THRESH_P99:-1}"
+RUN_EXCESS_P95="${RUN_EXCESS_P95:-1}"
+RUN_DELTA_P95="${RUN_DELTA_P95:-1}"
+RUN_EXCESS_DELTA_P95="${RUN_EXCESS_DELTA_P95:-1}"
 
 mkdir -p "$ROOT"
 STATUS_FILE="$ROOT/status.tsv"
@@ -86,24 +89,25 @@ train_fault_env() {
   export CRAFTER_FAULT_SAMPLER=1
   export CRAFTER_FAULT_PROFILE="$TRAIN_FAULT_PROFILE"
   export CRAFTER_FAULT_EP_PROB="$TRAIN_FAULT_EP_PROB"
+  export CRAFTER_FAULT_FREQ_TIER="$FAULT_FREQ_TIER"
   export CRAFTER_SEMANTIC_FAULT_SAMPLER=0
   export CRAFTER_SEMANTIC_FAULT_EP_PROB=0.0
   export CRAFTER_SEMANTIC_FAULT_MANIFEST_PROB=0.0
   export CRAFTER_TESTER_REWARD=0
   export CRAFTER_USE_RND=0
   export CRAFTER_RND_UPDATE=0
-  if [[ -n "$FAULT_FREQ_TIER" ]]; then
-    export CRAFTER_FAULT_FREQ_TIER="$FAULT_FREQ_TIER"
-  else
-    unset CRAFTER_FAULT_FREQ_TIER || true
-  fi
   unset CRAFTER_TRACE_PATH || true
 }
 
 run_train() {
   local outname="$1"
   local beta="$2"
-  local log_only="$3"
+  local reward_mode="$3"
+  local norm_mode="$4"
+  local reward_threshold="$5"
+  local clip="$6"
+  local reward_gate="$7"
+  local delta_threshold="${8:-0.5}"
   local outdir="$ROOT/$outname"
   mkdir -p "$outdir"
   train_fault_env
@@ -119,10 +123,14 @@ run_train() {
     --fault.enabled True \
     --fault.ref_ckpt "$REF_CKPT" \
     --fault.norm_stats "$STATS_FILE" \
-    --fault.log_only "$log_only" \
+    --fault.log_only False \
     --fault.beta "$beta" \
-    --fault.clip "$FAULT_CLIP" \
-    --fault.reward_gate none \
+    --fault.reward_mode "$reward_mode" \
+    --fault.norm_mode "$norm_mode" \
+    --fault.reward_threshold "$reward_threshold" \
+    --fault.reward_delta_threshold "$delta_threshold" \
+    --fault.clip "$clip" \
+    --fault.reward_gate "$reward_gate" \
     --fault.use_reward_error True \
     --fault.w_reward 0.0
 }
@@ -156,8 +164,16 @@ run_case() {
   local train_name="$1"
   local eval_name="$2"
   local beta="$3"
-  local log_only="$4"
-  run_job "$train_name" run_train "$train_name" "$beta" "$log_only"
+  local reward_mode="$4"
+  local norm_mode="$5"
+  local reward_threshold="$6"
+  local clip="$7"
+  local reward_gate="$8"
+  local delta_threshold="${9:-0.5}"
+
+  run_job "$train_name" \
+    run_train "$train_name" "$beta" "$reward_mode" "$norm_mode" \
+      "$reward_threshold" "$clip" "$reward_gate" "$delta_threshold"
   local ckpt
   ckpt="$(latest_ckpt_dir "$ROOT/$train_name")"
   if [[ -n "${ckpt:-}" && -d "$ckpt" ]]; then
@@ -169,10 +185,15 @@ run_case() {
 
 run_analysis() {
   local outdir="$ROOT/analysis"
-  local roots=("$ROOT")
+  local roots=()
   if [[ -d "$REF_PROBE_ROOT" ]]; then
-    roots=("$REF_PROBE_ROOT" "$ROOT")
+    roots+=("$REF_PROBE_ROOT")
   fi
+  if [[ -d "$COMPARISON_ROOT" ]]; then
+    roots+=("$COMPARISON_ROOT")
+  fi
+  roots+=("$ROOT")
+
   run_job "99_analysis" \
     "$PYTHON_BIN" "$ANALYZE_PY" \
       --roots "${roots[@]}" \
@@ -180,6 +201,12 @@ run_analysis() {
       --splits "$EVAL_SPLITS" \
       --trace-analysis \
       --top-fracs 0.01,0.05
+
+  if [[ -f "$PLOT_PY" ]]; then
+    run_job "99_objective_plots" \
+      "$PYTHON_BIN" "$PLOT_PY" \
+        --analysis-dir "$outdir"
+  fi
 }
 
 if [[ ! -f "$STATS_FILE" ]]; then
@@ -190,8 +217,9 @@ fi
 echo -e "time\tname\tstatus" > "$STATUS_FILE"
 
 echo "===================================================="
-echo "[Low-level fault adaptation probe]"
+echo "[Fault objective weekend queue]"
 echo "root              : $ROOT"
+echo "comparison root   : $COMPARISON_ROOT"
 echo "reference ckpt    : $REF_CKPT"
 echo "reference probe   : $REF_PROBE_ROOT"
 echo "stats             : $STATS_FILE"
@@ -199,28 +227,52 @@ echo "train steps       : $TRAIN_STEPS"
 echo "eval steps        : $EVAL_STEPS"
 echo "eval splits       : $EVAL_SPLITS"
 echo "replay size       : $REPLAY_SIZE"
-echo "fault ep prob     : $TRAIN_FAULT_EP_PROB"
+echo "fault freq tier   : $FAULT_FREQ_TIER"
 echo "train profile     : $TRAIN_FAULT_PROFILE"
 echo "seen profile      : $EVAL_SEEN_FAULT_PROFILE"
 echo "holdout profile   : $EVAL_HOLDOUT_FAULT_PROFILE"
-echo "fault freq tier   : ${FAULT_FREQ_TIER:-custom/current defaults}"
-echo "run task-only     : $RUN_TASK_ONLY"
-echo "run beta=0.05     : $RUN_BETA005"
-echo "run beta=0.1      : $RUN_BETA01"
+echo "run threshold p95 : $RUN_THRESH_P95"
+echo "run threshold p99 : $RUN_THRESH_P99"
+echo "run excess p95    : $RUN_EXCESS_P95"
+echo "run delta p95     : $RUN_DELTA_P95"
+echo "run excess delta  : $RUN_EXCESS_DELTA_P95"
 echo "===================================================="
 
-if [[ "$RUN_TASK_ONLY" == "1" ]]; then
-  run_case "01_task_only_fault_logging" "02_eval_task_only_fault_logging" "0.0" "True"
+if [[ "$RUN_THRESH_P95" == "1" ]]; then
+  run_case \
+    "01_threshold_p95_beta01_action" \
+    "02_eval_threshold_p95_beta01_action" \
+    "0.1" "threshold" "p95" "1.0" "1.0" "nonzero_action" "0.5"
 fi
 
-if [[ "$RUN_BETA005" == "1" ]]; then
-  run_case "03_fault_adapt_beta005" "04_eval_fault_adapt_beta005" "0.05" "False"
+if [[ "$RUN_THRESH_P99" == "1" ]]; then
+  run_case \
+    "03_threshold_p99_beta02_action" \
+    "04_eval_threshold_p99_beta02_action" \
+    "0.2" "threshold" "p99" "1.0" "1.0" "nonzero_action" "0.5"
 fi
 
-if [[ "$RUN_BETA01" == "1" ]]; then
-  run_case "05_fault_adapt_beta01" "06_eval_fault_adapt_beta01" "0.1" "False"
+if [[ "$RUN_EXCESS_P95" == "1" ]]; then
+  run_case \
+    "05_excess_p95_beta01_action" \
+    "06_eval_excess_p95_beta01_action" \
+    "0.1" "excess_threshold" "p95" "1.0" "2.0" "nonzero_action" "0.5"
+fi
+
+if [[ "$RUN_DELTA_P95" == "1" ]]; then
+  run_case \
+    "07_delta_p95_beta01_action" \
+    "08_eval_delta_p95_beta01_action" \
+    "0.1" "delta_threshold" "p95" "1.0" "1.0" "nonzero_action" "0.5"
+fi
+
+if [[ "$RUN_EXCESS_DELTA_P95" == "1" ]]; then
+  run_case \
+    "09_excess_delta_p95_beta01_action" \
+    "10_eval_excess_delta_p95_beta01_action" \
+    "0.1" "excess_delta_threshold" "p95" "1.0" "2.0" "nonzero_action" "0.5"
 fi
 
 run_analysis
-record_status "lowlevel_fault_adapt_probe_queue" "FINISHED"
+record_status "fault_objective_weekend_queue" "FINISHED"
 echo "Saved under: $ROOT"

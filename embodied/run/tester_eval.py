@@ -221,6 +221,7 @@ class EvalCollector:
     fault_manifested = int(_scalar(
         tran.get('log/fault_manifested', fault_applied)) > 0.5)
     fault_manifest_prob = _scalar(tran.get('log/fault_manifest_prob', 0.0))
+    fault_profile_id = int(_scalar(tran.get('log/fault_profile_id', 0.0)))
     semantic_fault_episode = int(
         _scalar(tran.get('log/semantic_fault_episode', 0.0)) > 0.5)
     semantic_fault_applied = int(
@@ -303,6 +304,7 @@ class EvalCollector:
         'fault_trigger_context': int(fault_trigger_context),
         'lowlevel_trigger_context': int(lowlevel_trigger_context),
         'fault_manifest_prob': float(fault_manifest_prob),
+        'fault_profile_id': int(fault_profile_id),
         'semantic_fault_episode': int(semantic_fault_episode),
         'semantic_fault_applied': int(semantic_fault_applied),
         'semantic_trigger_context': int(semantic_trigger_context),
@@ -337,7 +339,7 @@ class EvalCollector:
           'fault_applied_count', 'fault_manifested_count',
           'fault_trigger_context_count', 'lowlevel_trigger_context_count',
           'semantic_fault_applied_count', 'semantic_trigger_context_count',
-          'fault_manifest_prob_max',
+          'fault_manifest_prob_max', 'fault_profile_id',
           'max_ref_bug_score', 'max_ref_bug_kl',
           'max_fault_score', 'max_latent_kl_surprise',
       ])
@@ -357,6 +359,7 @@ class EvalCollector:
         'fault_trigger_context': 'sum',
         'lowlevel_trigger_context': 'sum',
         'fault_manifest_prob': 'max',
+        'fault_profile_id': 'max',
         'semantic_fault_applied': 'sum',
         'semantic_trigger_context': 'sum',
         'fault_score': 'max',
@@ -427,22 +430,26 @@ def configure_split_env(split_name, outdir):
   if split_name == 'clean':
     os.environ['CRAFTER_FAULT_SAMPLER'] = '0'
     os.environ['CRAFTER_FAULT'] = '0'
-    os.environ['CRAFTER_FAULT_PROFILE'] = 'train'
+    os.environ['CRAFTER_FAULT_PROFILE'] = os.getenv(
+        'TESTER_EVAL_CLEAN_FAULT_PROFILE', 'benchmark_train')
 
   elif split_name == 'seen':
     os.environ['CRAFTER_FAULT_SAMPLER'] = '1'
     os.environ['CRAFTER_FAULT'] = '0'
-    os.environ['CRAFTER_FAULT_PROFILE'] = 'eval_seen'
+    os.environ['CRAFTER_FAULT_PROFILE'] = os.getenv(
+        'TESTER_EVAL_SEEN_FAULT_PROFILE', 'benchmark_seen')
 
   elif split_name == 'holdout':
     os.environ['CRAFTER_FAULT_SAMPLER'] = '1'
     os.environ['CRAFTER_FAULT'] = '0'
-    os.environ['CRAFTER_FAULT_PROFILE'] = 'eval_holdout'
+    os.environ['CRAFTER_FAULT_PROFILE'] = os.getenv(
+        'TESTER_EVAL_HOLDOUT_FAULT_PROFILE', 'benchmark_holdout')
 
   elif split_name == 'semantic_holdout':
     os.environ['CRAFTER_FAULT_SAMPLER'] = '0'
     os.environ['CRAFTER_FAULT'] = '0'
-    os.environ['CRAFTER_FAULT_PROFILE'] = 'train'
+    os.environ['CRAFTER_FAULT_PROFILE'] = os.getenv(
+        'TESTER_EVAL_CLEAN_FAULT_PROFILE', 'benchmark_train')
     os.environ['CRAFTER_SEMANTIC_FAULT_SAMPLER'] = '1'
     os.environ['CRAFTER_SEMANTIC_FAULT_PROFILE'] = os.getenv(
         'TESTER_EVAL_SEMANTIC_FAULT_PROFILE', 'eval_holdout')

@@ -58,6 +58,9 @@ defaults:
     w_kl: 1.0
     w_reward: 1.0
     norm_mode: p95
+    reward_mode: dense
+    reward_threshold: 1.0
+    reward_delta_threshold: 0.5
     reward_gate: none
     trace: fault_score_trace.jsonl
 

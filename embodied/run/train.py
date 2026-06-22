@@ -66,6 +66,7 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
   train_fps = elements.FPS()
   fault_episode_id = collections.defaultdict(int)
   fault_episode_step = collections.defaultdict(int)
+  fault_prev_score = collections.defaultdict(float)
 
   batch_steps = args.batch_size * args.batch_length
   should_train = elements.when.Ratio(args.train_ratio / batch_steps)
@@ -104,9 +105,13 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
   def apply_fault_score(tran, worker):
     if not use_fault:
       return
+    if tran['is_first']:
+      fault_prev_score[worker] = 0.0
+    tran['log/fault_score_prev'] = np.float32(fault_prev_score[worker])
     result = faultlib.compute_transition_fault(
         tran, fault_cfg, fault_stats, force_log_only=False)
     faultlib.add_transition_fault_logs(tran, result)
+    fault_prev_score[worker] = float(result['fault_score'])
     if not _cfg_get(fault_cfg, 'log_only', True):
       tran['reward'] = np.float32(result['augmented_reward'])
 

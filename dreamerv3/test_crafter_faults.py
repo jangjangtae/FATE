@@ -5,7 +5,11 @@ import numpy as np
 
 # import 경로는 네 프로젝트 구조에 맞게 바꿔야 할 수 있음
 # 예: from embodied.envs.crafter import Crafter
-from embodied.envs.crafter import Crafter
+from embodied.envs.crafter import (
+    Crafter,
+    FAULT_PROFILE_ALIASES,
+    FAULT_PROFILE_DEFAULTS,
+)
 
 
 def make_env():
@@ -26,6 +30,26 @@ def make_env():
     # reset 1회
     env.step({"action": np.int32(0), "reset": True})
     return env
+
+
+def test_fault_profile_definitions():
+    assert FAULT_PROFILE_ALIASES["train"] == "benchmark_train"
+    assert FAULT_PROFILE_ALIASES["eval_seen"] == "benchmark_seen"
+    assert FAULT_PROFILE_ALIASES["eval_holdout"] == "benchmark_holdout"
+
+    train = FAULT_PROFILE_DEFAULTS["benchmark_train"]
+    seen = FAULT_PROFILE_DEFAULTS["benchmark_seen"]
+    holdout = FAULT_PROFILE_DEFAULTS["benchmark_holdout"]
+
+    assert train["action"] == seen["action"]
+    assert train["context"] == seen["context"]
+    assert train["reward"] == seen["reward"]
+    assert "revisit_action_delay" in holdout["action"]
+    assert "revisit_action_ignore" in holdout["context"]
+    assert "reward_delay_after_two_rewards" in holdout["reward"]
+    assert train["stochastic_manifest"] is True
+    assert holdout["stochastic_manifest"] is True
+    print("PASS: fault_profile_definitions")
 
 
 def prime_env(env, family, subtype):
@@ -319,6 +343,7 @@ def test_early_done_after_repeat_switch():
 
 
 def run_all():
+    test_fault_profile_definitions()
     test_drop_to_fallback()
     test_remap_after_success_switch()
     test_delay_after_success()
@@ -338,7 +363,7 @@ def run_all():
     test_reward_delay_after_two_rewards()
     test_early_done_after_success_switch()
     test_early_done_after_repeat_switch()
-    print("\nALL 19 LOW-LEVEL FAULT TESTS PASSED")
+    print("\nALL 20 LOW-LEVEL FAULT TESTS PASSED")
 
 
 if __name__ == "__main__":

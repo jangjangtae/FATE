@@ -46,13 +46,55 @@ installed Crafter package at
 `dreamer_cuda/lib/python3.11/site-packages/crafter/env.py`. If the virtualenv is
 rebuilt, reapply that patch or vendor the Crafter environment into the repo.
 
+## Crafter-Aligned Fault Definition
+
+For the main experiments, a Crafter fault is defined as a corrupted transition
+that is reachable through normal gameplay loops, while the uncorrupted game
+state remains the reference behavior. This keeps the benchmark closer to game
+testing than to arbitrary action noise.
+
+The current low-level benchmark focuses on three Crafter-specific transition
+families:
+
+- `action_exec`: the requested action is executed incorrectly after a meaningful
+  progress event, repeated action pattern, revisit, or delayed follow-up.
+- `context_exec`: the action is valid globally, but is ignored in a gameplay
+  context where the agent just made progress or revisited a state.
+- `reward_timing`: reward delivery is delayed, suppressed, or scaled after an
+  achievement-like positive transition.
+
+High-level semantic faults, such as crafting-result or station-state
+inconsistency, remain in `semantic_holdout`. They are useful for showing the
+limits of latent transition surprise, but they should be reported separately
+unless a semantic consistency score is added.
+
+## Fault Profiles
+
+Use `CRAFTER_FAULT_PROFILE` to choose the bug suite. Old profile names are kept
+as aliases so older scripts continue to run:
+
+| Profile | Purpose | Main Trigger Style |
+| --- | --- | --- |
+| `benchmark_train` | Main training suite | progress/reward, repeat-switch, post-success action |
+| `benchmark_seen` | In-distribution eval | same subtypes as training |
+| `benchmark_holdout` | Generalization eval | revisit, delayed follow-up, repeated-progress reward |
+| `diagnostic_train` | Smoke tests | broad deterministic low-level faults |
+
+Aliases: `train -> benchmark_train`, `eval_seen -> benchmark_seen`,
+`eval_holdout -> benchmark_holdout`, and `eval -> benchmark_seen`.
+
+Benchmark profiles use stochastic manifestation by default: reaching a trigger
+context does not guarantee the transition is corrupted. Override with
+`CRAFTER_FAULT_STOCHASTIC_MANIFEST=0` only for debugging. `diagnostic_train`
+remains deterministic by default.
+
 ## Recommended Splits
 
-- Train/eval seen: moderate-frequency semantic and low-level faults that cover
-  common state consistency, action execution, and rule-precondition failures.
-- Holdout: same families, unseen subtypes.
+- Train: `benchmark_train` low-level transition faults.
+- Eval seen: `benchmark_seen`, same subtypes as training.
+- Eval holdout: `benchmark_holdout`, same broad families but unseen subtypes.
 - Semantic holdout: higher-level gameplay-rule faults where the trigger context
-  is meaningful even if the manifestation is stochastic.
+  is meaningful even if the latent-KL score does not always respond.
 - Realistic sparse: use only for final evaluation, not for reward tuning.
 
 ## Sanity Eval
@@ -85,3 +127,32 @@ Report task score and bug discovery together:
 For ICRL-style framing, the strongest claim is not that fault reward improves
 game score, but that clean-prior surprise can guide an agent toward vulnerable
 transition contexts while preserving task competence.
+
+## Objective Ablation
+
+Dense fault reward should be treated as a baseline, not the final method. A
+dense bonus can behave like generic novelty reward because every transition with
+nonzero clean-prior surprise receives some reward. The stronger adaptation
+claim should compare it against threshold-style objectives:
+
+- `dense`: `beta * clipped_fault_score`
+- `threshold`: `beta` only when the normalized score exceeds the clean
+  calibration threshold.
+- `excess_threshold`: a smooth bonus for the amount above the threshold.
+- `delta_threshold`: `beta` only when the normalized score spikes above its
+  previous value by a configured amount.
+- `excess_delta_threshold`: a smooth bonus for the amount of spike above the
+  delta threshold.
+
+Recommended weekend queue:
+
+```bash
+ROOT=/home/railab/logdir/fault_objective_weekend_$(date +%Y%m%d_%H%M%S) \
+TRAIN_STEPS=200000 \
+EVAL_STEPS=75000 \
+./dreamerv3/run_fault_objective_weekend_queue.sh
+```
+
+Interpretation target: threshold and delta objectives should improve fault
+discovery or ranking over task-only/dense baselines while keeping task score
+close to the clean/task-only reference.

@@ -60,6 +60,87 @@ FAULT_FREQUENCY_TIER_DEFAULTS = {
 }
 
 
+FAULT_PROFILE_ALIASES = {
+    # Backward-compatible names used by older experiment scripts.
+    'train': 'benchmark_train',
+    'eval': 'benchmark_seen',
+    'eval_seen': 'benchmark_seen',
+    'eval_holdout': 'benchmark_holdout',
+}
+
+FAULT_PROFILE_IDS = {
+    'unknown': 0,
+    'benchmark_train': 1,
+    'benchmark_seen': 2,
+    'benchmark_holdout': 3,
+    'diagnostic_train': 4,
+}
+
+FAULT_PROFILE_DEFAULTS = {
+    # Main training suite. These faults are tied to ordinary Crafter progress
+    # loops: collecting/crafting rewards, repeating useful actions, then
+    # switching to the next action after a successful transition.
+    'benchmark_train': {
+        'families': 'action_exec,context_exec,reward_timing',
+        'action': (
+            'remap_after_success_switch,delay_after_success,'
+            'sticky_after_repeat_switch'),
+        'context': 'ignore_nonzero_after_reward,ignore_nonzero_after_two_rewards',
+        'reward': 'reward_delay_on_positive,reward_scale_half_on_positive_switch',
+        'termination': '',
+        'cooldown': '8',
+        'stochastic_manifest': True,
+    },
+    # Same subtypes as training. This split estimates in-distribution fault
+    # seeking, not generalization.
+    'benchmark_seen': {
+        'families': 'action_exec,context_exec,reward_timing',
+        'action': (
+            'remap_after_success_switch,delay_after_success,'
+            'sticky_after_repeat_switch'),
+        'context': 'ignore_nonzero_after_reward,ignore_nonzero_after_two_rewards',
+        'reward': 'reward_delay_on_positive,reward_scale_half_on_positive_switch',
+        'termination': '',
+        'cooldown': '0',
+        'stochastic_manifest': True,
+    },
+    # Unseen but related Crafter transition faults. They still arise from
+    # natural gameplay contexts, but require revisit, delayed follow-up, or
+    # repeated successful progress rather than the exact training triggers.
+    'benchmark_holdout': {
+        'families': 'action_exec,context_exec,reward_timing',
+        'action': (
+            'revisit_action_delay,delayed_switch_failure,'
+            'remap_after_repeat_switch'),
+        'context': 'revisit_action_ignore',
+        'reward': 'reward_zero_after_repeat_switch,reward_delay_after_two_rewards',
+        'termination': '',
+        'cooldown': '0',
+        'stochastic_manifest': True,
+    },
+    # Explicit smoke-test profile. Use this for unit tests and quick visual
+    # checks where deterministic manifestation is useful.
+    'diagnostic_train': {
+        'families': 'action_exec,context_exec,reward_timing,termination_logic',
+        'action': (
+            'remap_after_success_switch,delay_after_success,'
+            'sticky_after_repeat_switch,remap_after_repeat_switch,'
+            'delay_after_late_episode_switch'),
+        'context': (
+            'ignore_nonzero_after_reward,ignore_switch_late_episode,'
+            'ignore_nonzero_after_two_rewards,revisit_action_ignore'),
+        'reward': (
+            'reward_delay_on_positive,reward_scale_half_on_positive_switch,'
+            'reward_zero_on_positive,reward_zero_after_repeat_switch,'
+            'reward_delay_after_two_rewards'),
+        'termination': (
+            'early_done_after_success_switch,early_done_after_repeat_switch'),
+        'cooldown': '0',
+        'stochastic_manifest': False,
+    },
+}
+
+
 def _apply_fault_frequency_tier_env():
   tier = os.getenv(
       'CRAFTER_FAULT_FREQ_TIER',
@@ -268,10 +349,23 @@ class Crafter(embodied.Env):
     # Fault profile
     # --------------------------------------------------
     self._fault_sampler = bool(int(os.getenv('CRAFTER_FAULT_SAMPLER', '0')))
-    self._fault_profile = os.getenv('CRAFTER_FAULT_PROFILE', 'train').strip().lower()
-    if self._fault_profile == 'eval':
-      self._fault_profile = 'eval_seen'
-    assert self._fault_profile in ('train', 'eval_seen', 'eval_holdout')
+    self._fault_profile_requested = os.getenv(
+        'CRAFTER_FAULT_PROFILE', 'benchmark_train').strip().lower()
+    self._fault_profile = FAULT_PROFILE_ALIASES.get(
+        self._fault_profile_requested, self._fault_profile_requested)
+    if self._fault_profile not in FAULT_PROFILE_DEFAULTS:
+      raise ValueError(
+          f'Unknown CRAFTER_FAULT_PROFILE={self._fault_profile_requested!r} '
+          f'(resolved to {self._fault_profile!r}). Expected one of '
+          f'{sorted(FAULT_PROFILE_DEFAULTS)} or aliases '
+          f'{sorted(FAULT_PROFILE_ALIASES)}.')
+    self._fault_profile_defaults = FAULT_PROFILE_DEFAULTS[self._fault_profile]
+    default_stochastic_manifest = (
+        '1' if self._fault_profile_defaults.get('stochastic_manifest', False)
+        else '0')
+    self._fault_stochastic_manifest = bool(int(os.getenv(
+        'CRAFTER_FAULT_STOCHASTIC_MANIFEST',
+        default_stochastic_manifest)))
 
     self._fault_episode_prob = float(os.getenv('CRAFTER_FAULT_EP_PROB', '0.3'))
     self._fault_episode_prob_min = float(os.getenv('CRAFTER_FAULT_EP_PROB_MIN', '0.1'))
@@ -285,7 +379,7 @@ class Crafter(embodied.Env):
         os.getenv('CRAFTER_SEMANTIC_FAULT_MANIFEST_PROB', '1.0'))
 
     # cooldown
-    default_cooldown = '8' if self._fault_profile == 'train' else '0'
+    default_cooldown = str(self._fault_profile_defaults.get('cooldown', '0'))
     self._fault_cooldown_steps = int(os.getenv('CRAFTER_FAULT_COOLDOWN', default_cooldown))
     self._fault_cooldown_min = int(os.getenv('CRAFTER_FAULT_COOLDOWN_MIN', '0'))
     self._fault_cooldown_max = int(os.getenv('CRAFTER_FAULT_COOLDOWN_MAX', '20'))
@@ -298,28 +392,11 @@ class Crafter(embodied.Env):
     self._sched_floor_ratio = float(os.getenv('CRAFTER_SCHED_FLOOR_RATIO', '0.7'))
     self._sched_window = int(os.getenv('CRAFTER_SCHED_WINDOW', '30'))
 
-    if self._fault_profile == 'train':
-      default_families = 'action_exec,context_exec,reward_timing'
-      default_action = 'remap_after_success_switch,delay_after_success,sticky_after_repeat_switch'
-      default_context = 'ignore_nonzero_after_reward,ignore_switch_late_episode'
-      default_reward = 'reward_delay_on_positive,reward_scale_half_on_positive_switch'
-      default_term = ''
-
-    elif self._fault_profile == 'eval_seen':
-      # 학습 때 본 버그들 평가
-      default_families = 'action_exec,context_exec,reward_timing'
-      default_action = 'remap_after_success_switch,delay_after_success,sticky_after_repeat_switch'
-      default_context = 'ignore_nonzero_after_reward,ignore_switch_late_episode'
-      default_reward = 'reward_delay_on_positive,reward_scale_half_on_positive_switch'
-      default_term = ''
-
-    elif self._fault_profile == 'eval_holdout':
-      # probing / revisit / delayed-context 기반 holdout bug들
-      default_families = 'action_exec,context_exec'
-      default_action = 'revisit_action_delay,delayed_switch_failure'
-      default_context = 'revisit_action_ignore'
-      default_reward = ''
-      default_term = ''
+    default_families = self._fault_profile_defaults['families']
+    default_action = self._fault_profile_defaults['action']
+    default_context = self._fault_profile_defaults['context']
+    default_reward = self._fault_profile_defaults['reward']
+    default_term = self._fault_profile_defaults['termination']
 
     self._fault_families = self._parse_csv(
         os.getenv('CRAFTER_FAULT_FAMILIES', default_families))
@@ -1140,6 +1217,9 @@ class Crafter(embodied.Env):
         'fault_manifested_any': int(self._ep_fault_applied_any),
         'fault_manifest_count': int(self._ep_fault_manifest_count),
         'fault_manifest_prob_max': round(float(self._ep_fault_manifest_prob_max), 6),
+        'fault_profile': self._fault_profile,
+        'fault_profile_requested': self._fault_profile_requested,
+        'fault_stochastic_manifest': int(self._fault_stochastic_manifest),
         'fault_frequency_tier': self._fault_frequency_tier,
         'fault_count': int(self._fault_count),
         'fault_rate': float(self._fault_count / max(1, length)),
@@ -1194,7 +1274,7 @@ class Crafter(embodied.Env):
   def _current_fault_manifest_prob(self):
     if self._fault_spec is None:
       return 0.0
-    if self._fault_profile in ('eval_seen', 'eval_holdout'):
+    if self._fault_stochastic_manifest:
       return float(self._fault_spec.get('severity', 0.0))
     return 1.0
 
@@ -1266,9 +1346,7 @@ class Crafter(embodied.Env):
     if self._fault_cooldown > 0:
       return False
 
-    # train: deterministic trigger firing
-    # eval_seen / eval_holdout: stochastic severity
-    if self._fault_profile in ('eval_seen', 'eval_holdout'):
+    if self._fault_stochastic_manifest:
       sev = float(self._fault_spec.get('severity', 0.0))
       return self._rng.random() < sev
     return True
@@ -1561,6 +1639,7 @@ class Crafter(embodied.Env):
         'log/lowlevel_trigger_context': elements.Space(np.int32),
         'log/fault_manifested': elements.Space(np.int32),
         'log/fault_manifest_prob': elements.Space(np.float32),
+        'log/fault_profile_id': elements.Space(np.int32),
         'log/fault_frequency_tier_id': elements.Space(np.int32),
         'log/fault_family_id': elements.Space(np.int32),
         'log/fault_type_id': elements.Space(np.int32),
@@ -1678,6 +1757,7 @@ class Crafter(embodied.Env):
               'lowlevel_trigger_context': 0,
               'fault_manifested': 0,
               'fault_manifest_prob': float(self._current_fault_manifest_prob()),
+              'fault_profile': self._fault_profile,
               'fault_frequency_tier': self._fault_frequency_tier,
               'fault_applied': np.int32(0),
               'semantic_fault_episode': np.int32(0),
@@ -1893,6 +1973,9 @@ class Crafter(embodied.Env):
     info['lowlevel_trigger_context'] = int(lowlevel_trigger_context)
     info['fault_exists_episode'] = int(fault_exists_episode)
     info['fault_manifest_prob'] = float(fault_manifest_prob)
+    info['fault_profile'] = self._fault_profile
+    info['fault_profile_requested'] = self._fault_profile_requested
+    info['fault_stochastic_manifest'] = int(self._fault_stochastic_manifest)
     info['fault_frequency_tier'] = self._fault_frequency_tier
     info['semantic_fault_manifest_prob'] = float(semantic_manifest_prob)
     episode_fault_flag = int(fault_exists_episode)
@@ -1968,6 +2051,9 @@ class Crafter(embodied.Env):
           'lowlevel_trigger_context': int(lowlevel_trigger_context),
           'fault_manifested': int(fault_applied),
           'fault_manifest_prob': float(fault_manifest_prob),
+          'fault_profile': self._fault_profile,
+          'fault_profile_requested': self._fault_profile_requested,
+          'fault_stochastic_manifest': int(self._fault_stochastic_manifest),
           'fault_frequency_tier': self._fault_frequency_tier,
           'semantic_fault_episode': int(self._semantic_fault_episode_seen or semantic_fault_episode),
           'fault_applied': int(fault_applied),
@@ -2144,6 +2230,8 @@ class Crafter(embodied.Env):
     lowlevel_trigger_context = int(info.get('lowlevel_trigger_context', 0)) if info else 0
     fault_manifested = int(info.get('fault_manifested', fault_applied)) if info else int(fault_applied)
     fault_manifest_prob = float(info.get('fault_manifest_prob', 0.0)) if info else 0.0
+    fault_profile = info.get('fault_profile', self._fault_profile) if info else self._fault_profile
+    fault_profile_id = FAULT_PROFILE_IDS.get(str(fault_profile), 0)
     fault_frequency_tier = (
         info.get('fault_frequency_tier', self._fault_frequency_tier)
         if info else self._fault_frequency_tier)
@@ -2221,6 +2309,7 @@ class Crafter(embodied.Env):
         **{'log/lowlevel_trigger_context': np.int32(lowlevel_trigger_context)},
         **{'log/fault_manifested': np.int32(fault_manifested)},
         **{'log/fault_manifest_prob': np.float32(fault_manifest_prob)},
+        **{'log/fault_profile_id': np.int32(fault_profile_id)},
         **{'log/fault_frequency_tier_id': np.int32(fault_frequency_tier_id)},
         **{'log/fault_family_id': np.int32(fault_family_id)},
         **{'log/fault_type_id': np.int32(fault_type_id)},
@@ -2309,6 +2398,9 @@ class Crafter(embodied.Env):
         'fault_manifest_count': int(getattr(self, '_ep_fault_manifest_count', 0)),
         'fault_manifest_prob_max': round(float(getattr(
             self, '_ep_fault_manifest_prob_max', info.get('fault_manifest_prob', 0.0))), 6),
+        'fault_profile': self._fault_profile,
+        'fault_profile_requested': self._fault_profile_requested,
+        'fault_stochastic_manifest': int(self._fault_stochastic_manifest),
         'fault_frequency_tier': self._fault_frequency_tier,
         'fault_count': int(self._fault_count),
         'fault_rate': float(self._fault_count / max(1, length)),
