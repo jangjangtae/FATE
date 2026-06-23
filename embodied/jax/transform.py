@@ -66,6 +66,7 @@ def apply(
     single_output=False,
     return_params=False,
     donate_params=False,
+    split_params=False,
     # shard_map specific
     split_rng=True,
     use_shardmap=False,
@@ -76,7 +77,7 @@ def apply(
     assert len(out_shardings) == 1
 
   def fn(*args, inner=fn):
-    if donate_params:
+    if donate_params or split_params:
       donated, allocated, seed, *args = args
       params = {**donated, **allocated}
     else:

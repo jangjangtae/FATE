@@ -36,10 +36,18 @@ def test_fault_profile_definitions():
     assert FAULT_PROFILE_ALIASES["train"] == "benchmark_train"
     assert FAULT_PROFILE_ALIASES["eval_seen"] == "benchmark_seen"
     assert FAULT_PROFILE_ALIASES["eval_holdout"] == "benchmark_holdout"
+    assert FAULT_PROFILE_ALIASES["v2_train"] == "benchmark_v2_train"
+    assert FAULT_PROFILE_ALIASES["v2_seen"] == "benchmark_v2_seen"
+    assert FAULT_PROFILE_ALIASES["v2_holdout"] == "benchmark_v2_holdout"
+    assert FAULT_PROFILE_ALIASES["v2_sparse"] == "benchmark_v2_sparse"
 
     train = FAULT_PROFILE_DEFAULTS["benchmark_train"]
     seen = FAULT_PROFILE_DEFAULTS["benchmark_seen"]
     holdout = FAULT_PROFILE_DEFAULTS["benchmark_holdout"]
+    v2_train = FAULT_PROFILE_DEFAULTS["benchmark_v2_train"]
+    v2_seen = FAULT_PROFILE_DEFAULTS["benchmark_v2_seen"]
+    v2_holdout = FAULT_PROFILE_DEFAULTS["benchmark_v2_holdout"]
+    v2_sparse = FAULT_PROFILE_DEFAULTS["benchmark_v2_sparse"]
 
     assert train["action"] == seen["action"]
     assert train["context"] == seen["context"]
@@ -49,6 +57,18 @@ def test_fault_profile_definitions():
     assert "reward_delay_after_two_rewards" in holdout["reward"]
     assert train["stochastic_manifest"] is True
     assert holdout["stochastic_manifest"] is True
+    assert v2_train["action"] == v2_seen["action"]
+    assert v2_train["context"] == v2_seen["context"]
+    assert v2_train["reward"] == v2_seen["reward"]
+    assert "delay_after_success" in v2_train["action"]
+    assert "ignore_nonzero_after_reward" in v2_train["context"]
+    assert "reward_delay_on_positive" in v2_train["reward"]
+    assert "revisit_action_delay" in v2_holdout["action"]
+    assert "ignore_nonzero_after_two_rewards" in v2_holdout["context"]
+    assert "reward_delay_after_two_rewards" in v2_holdout["reward"]
+    assert int(v2_sparse["cooldown"]) > int(v2_holdout["cooldown"])
+    assert v2_train["stochastic_manifest"] is True
+    assert v2_holdout["stochastic_manifest"] is True
     print("PASS: fault_profile_definitions")
 
 

@@ -31,6 +31,8 @@ class Options:
   enable_policy: bool = True
   ckpt_chunksize: int = -1
   precompile: bool = True
+  prefetch: bool = True
+  donate_train: bool = True
 
 
 class Agent(embodied.Agent):
@@ -143,7 +145,8 @@ class Agent(embodied.Agent):
     self._train = transform.apply(
         nj.pure(self.model.train), self.train_mesh,
         (dona_sharding, allo_sharding, tm, ts, ts), (tp, ts, ts, tm), ar,
-        return_params=True, donate_params=True, first_outnums=(3,),
+        return_params=True, donate_params=jaxcfg.donate_train,
+        split_params=True, first_outnums=(3,),
         **shared_kwargs)
     self._report = transform.apply(
         nj.pure(self.model.report), self.train_mesh,
@@ -269,8 +272,12 @@ class Agent(embodied.Agent):
     dona = {k: v for k, v in self.params.items() if k not in self.policy_keys}
     with self.train_lock:
       with elements.timer.section('jit_train'):
-        with jax.profiler.StepTraceAnnotation(
-            'train', step_num=int(self.n_updates)):
+        if self.jaxcfg.profiler:
+          trace = jax.profiler.StepTraceAnnotation(
+              'train', step_num=int(self.n_updates))
+        else:
+          trace = contextlib.nullcontext()
+        with trace:
           self.params, carry, outs, mets = self._train(
               dona, allo, seed, carry, data)
     self.n_updates.increment()
@@ -334,7 +341,10 @@ class Agent(embodied.Agent):
         self.n_batches.value += 1
       seed = self._seeds(counter, self.train_mirrored)
       return {**data, 'seed': seed}
-    return embodied.streams.Prefetch(st, fn)
+    if self.jaxcfg.prefetch:
+      return embodied.streams.Prefetch(st, fn)
+    else:
+      return embodied.streams.Map(st, fn)
 
   @elements.timer.section('jaxagent_save')
   def save(self):

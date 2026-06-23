@@ -66,6 +66,12 @@ FAULT_PROFILE_ALIASES = {
     'eval': 'benchmark_seen',
     'eval_seen': 'benchmark_seen',
     'eval_holdout': 'benchmark_holdout',
+    # Research benchmark v2 aliases. These are intentionally opt-in so older
+    # runs keep their exact fault distribution.
+    'v2_train': 'benchmark_v2_train',
+    'v2_seen': 'benchmark_v2_seen',
+    'v2_holdout': 'benchmark_v2_holdout',
+    'v2_sparse': 'benchmark_v2_sparse',
 }
 
 FAULT_PROFILE_IDS = {
@@ -74,6 +80,10 @@ FAULT_PROFILE_IDS = {
     'benchmark_seen': 2,
     'benchmark_holdout': 3,
     'diagnostic_train': 4,
+    'benchmark_v2_train': 5,
+    'benchmark_v2_seen': 6,
+    'benchmark_v2_holdout': 7,
+    'benchmark_v2_sparse': 8,
 }
 
 FAULT_PROFILE_DEFAULTS = {
@@ -137,6 +147,55 @@ FAULT_PROFILE_DEFAULTS = {
             'early_done_after_success_switch,early_done_after_repeat_switch'),
         'cooldown': '0',
         'stochastic_manifest': False,
+    },
+    # Benchmark v2 focuses on game-QA style faults. The train/seen split keeps
+    # ordinary progress contexts, while holdout requires more accumulated game
+    # state such as revisits, repeated progress, or delayed follow-up actions.
+    'benchmark_v2_train': {
+        'families': 'action_exec,context_exec,reward_timing',
+        'action': (
+            'delay_after_success,remap_after_success_switch,'
+            'sticky_after_repeat_switch'),
+        'context': 'ignore_nonzero_after_reward',
+        'reward': 'reward_delay_on_positive,reward_scale_half_on_positive_switch',
+        'termination': '',
+        'cooldown': '12',
+        'stochastic_manifest': True,
+    },
+    'benchmark_v2_seen': {
+        'families': 'action_exec,context_exec,reward_timing',
+        'action': (
+            'delay_after_success,remap_after_success_switch,'
+            'sticky_after_repeat_switch'),
+        'context': 'ignore_nonzero_after_reward',
+        'reward': 'reward_delay_on_positive,reward_scale_half_on_positive_switch',
+        'termination': '',
+        'cooldown': '8',
+        'stochastic_manifest': True,
+    },
+    'benchmark_v2_holdout': {
+        'families': 'action_exec,context_exec,reward_timing',
+        'action': (
+            'revisit_action_delay,delayed_switch_failure,'
+            'remap_after_repeat_switch'),
+        'context': 'revisit_action_ignore,ignore_nonzero_after_two_rewards',
+        'reward': 'reward_zero_after_repeat_switch,reward_delay_after_two_rewards',
+        'termination': '',
+        'cooldown': '8',
+        'stochastic_manifest': True,
+    },
+    # Same operators as holdout, but with longer cooldown. Use together with
+    # CRAFTER_FAULT_FREQ_TIER=realistic or sparse for final sparse evaluation.
+    'benchmark_v2_sparse': {
+        'families': 'action_exec,context_exec,reward_timing',
+        'action': (
+            'revisit_action_delay,delayed_switch_failure,'
+            'remap_after_repeat_switch'),
+        'context': 'revisit_action_ignore,ignore_nonzero_after_two_rewards',
+        'reward': 'reward_zero_after_repeat_switch,reward_delay_after_two_rewards',
+        'termination': '',
+        'cooldown': '16',
+        'stochastic_manifest': True,
     },
 }
 

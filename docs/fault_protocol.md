@@ -78,10 +78,15 @@ as aliases so older scripts continue to run:
 | `benchmark_train` | Main training suite | progress/reward, repeat-switch, post-success action |
 | `benchmark_seen` | In-distribution eval | same subtypes as training |
 | `benchmark_holdout` | Generalization eval | revisit, delayed follow-up, repeated-progress reward |
+| `benchmark_v2_train` | Main paper train suite | progress-gated execution/reward faults |
+| `benchmark_v2_seen` | Main paper seen eval | same operators as v2 train |
+| `benchmark_v2_holdout` | Main paper holdout eval | unseen operators requiring accumulated game state |
+| `benchmark_v2_sparse` | Final sparse realism eval | holdout operators with longer cooldown |
 | `diagnostic_train` | Smoke tests | broad deterministic low-level faults |
 
 Aliases: `train -> benchmark_train`, `eval_seen -> benchmark_seen`,
 `eval_holdout -> benchmark_holdout`, and `eval -> benchmark_seen`.
+V2 aliases are `v2_train`, `v2_seen`, `v2_holdout`, and `v2_sparse`.
 
 Benchmark profiles use stochastic manifestation by default: reaching a trigger
 context does not guarantee the transition is corrupted. Override with
@@ -127,6 +132,10 @@ Report task score and bug discovery together:
 For ICRL-style framing, the strongest claim is not that fault reward improves
 game score, but that clean-prior surprise can guide an agent toward vulnerable
 transition contexts while preserving task competence.
+
+The paper-facing v2 benchmark rationale is written in
+`docs/crafter_fault_benchmark_v2.md`. Use that file when explaining why each
+bug family is included and why train/seen/holdout/sparse splits are separated.
 
 ## Objective Ablation
 

@@ -33,6 +33,11 @@ RUN_BETA005="${RUN_BETA005:-1}"
 RUN_BETA01="${RUN_BETA01:-0}"
 
 mkdir -p "$ROOT"
+LAUNCHER_LOG="$ROOT/launcher.log"
+if [[ "${INTERNAL_LAUNCHER_LOG:-1}" == "1" && -z "${_DREAMER_QUEUE_LOGGING:-}" ]]; then
+  export _DREAMER_QUEUE_LOGGING=1
+  exec > >(tee -a "$LAUNCHER_LOG") 2>&1
+fi
 STATUS_FILE="$ROOT/status.tsv"
 
 stamp() {

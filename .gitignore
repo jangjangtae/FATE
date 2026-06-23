@@ -9,3 +9,5 @@ dreamer_cuda/
 debug/
 backups/
 logdir/
+.deps/
+libdevice.10.bc
