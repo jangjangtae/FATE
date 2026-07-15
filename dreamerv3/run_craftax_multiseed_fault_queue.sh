@@ -475,11 +475,26 @@ variant_params() {
     delta_p95_beta01)
       echo "False delta_threshold 0.1 1.0 0.5 2.0 none p95 0.0 0.0 0.0 False 0.0"
       ;;
+    delta_p95_beta02)
+      echo "False delta_threshold 0.2 1.0 0.5 2.0 none p95 0.0 0.0 0.0 False 0.0"
+      ;;
+    delta_p95_beta04)
+      echo "False delta_threshold 0.4 1.0 0.5 2.0 none p95 0.0 0.0 0.0 False 0.0"
+      ;;
+    excess_delta_p90_beta02)
+      echo "False excess_delta_threshold 0.2 1.0 0.5 2.0 none p90 0.0 0.0 0.0 False 0.0"
+      ;;
     excess_delta_p95_beta01)
       echo "False excess_delta_threshold 0.1 1.0 0.5 2.0 none p95 0.0 0.0 0.0 False 0.0"
       ;;
     excess_delta_p95_beta02)
       echo "False excess_delta_threshold 0.2 1.0 0.5 2.0 none p95 0.0 0.0 0.0 False 0.0"
+      ;;
+    excess_delta_p95_beta04)
+      echo "False excess_delta_threshold 0.4 1.0 0.5 2.0 none p95 0.0 0.0 0.0 False 0.0"
+      ;;
+    excess_delta_p99_beta02)
+      echo "False excess_delta_threshold 0.2 1.0 0.5 2.0 none p99 0.0 0.0 0.0 False 0.0"
       ;;
     bugonly_from_scratch)
       # Standard DreamerV3 trained from scratch in the fault-seeded environment.
