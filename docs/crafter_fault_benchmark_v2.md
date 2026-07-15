@@ -5,6 +5,11 @@ not to make the baseline weak. The goal is to evaluate whether an agent can
 keep playing Crafter while visiting vulnerable transition contexts and detecting
 deviations from a clean dynamics prior.
 
+For the Craftax port and paper-facing fault-seeding justification, see
+`docs/craftax_fault_seeding_rationale.md`. That note frames the benchmark as
+controlled fault seeding inspired by automated game testing and bug-zoo style
+benchmarks.
+
 ## Design Principles
 
 1. Bugs must be tied to gameplay state, not arbitrary action noise.

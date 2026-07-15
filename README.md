@@ -4,6 +4,14 @@ A reimplementation of [DreamerV3][paper], a scalable and general reinforcement
 learning algorithm that masters a wide range of applications with fixed
 hyperparameters.
 
+## Fault-Seeking Craftax Branch
+
+This working branch contains additional code for clean-prior fault-seeking
+experiments in Craftax, including seeded fault profiles, frozen clean-reference
+fault scoring, RND and scratch baselines, and analysis scripts for the AAAI
+submission draft. See [docs/aaai_reproducibility.md](docs/aaai_reproducibility.md)
+for the experiment protocol and reproduction commands.
+
 ![DreamerV3 Tasks](https://user-images.githubusercontent.com/2111293/217647148-cbc522e2-61ad-4553-8e14-1ecdc8d9438b.gif)
 
 If you find this code useful, please reference in your paper:

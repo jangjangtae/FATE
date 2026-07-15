@@ -185,9 +185,10 @@ class Agent(embodied.jax.Agent):
   def _fault_config(self):
     return getattr(self.config, 'fault', None)
 
-  def _fault_metrics(self, feat, obs):
+  def _fault_metrics(self, feat, obs, tokens):
     return fault_score.agent_fault_metrics(
-        self.dyn, self.rew, self.feat2tensor, feat, obs, self._fault_config())
+        self.dyn, self.rew, self.feat2tensor, feat, obs, self._fault_config(),
+        tokens=tokens)
 
   def policy(self, carry, obs, mode='train'):
     (enc_carry, dyn_carry, dec_carry, prevact) = carry
@@ -211,7 +212,7 @@ class Agent(embodied.jax.Agent):
     # step-level bug metrics
     bug = self._bug_metrics(feat, obs)
     out.update({f'bug/{k}': v for k, v in bug.items()})
-    fault = self._fault_metrics(feat, obs)
+    fault = self._fault_metrics(feat, obs, tokens)
     out.update({f'fault/{k}': v for k, v in fault.items()})
 
     carry = (enc_carry, dyn_carry, dec_carry, act)

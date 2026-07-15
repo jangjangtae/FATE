@@ -42,10 +42,12 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
   use_fault = _fault_enabled(args)
   faultlib = None
   ref_agent = None
+  fault_tracker = None
   fault_stats = {}
   if use_fault:
     from dreamerv3 import fault_score as faultlib
     ref_agent = make_agent()
+    fault_tracker = faultlib.FaultRewardTracker(fault_cfg)
     fault_stats = faultlib.load_norm_stats(_cfg_get(
         fault_cfg, 'norm_stats', ''))
   replay = make_replay()
@@ -109,7 +111,9 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
       fault_prev_score[worker] = 0.0
     tran['log/fault_score_prev'] = np.float32(fault_prev_score[worker])
     result = faultlib.compute_transition_fault(
-        tran, fault_cfg, fault_stats, force_log_only=False)
+        tran, fault_cfg, fault_stats, force_log_only=False,
+        beta_override=fault_tracker.beta)
+    fault_tracker.apply(tran, worker, result, force_log_only=False)
     faultlib.add_transition_fault_logs(tran, result)
     fault_prev_score[worker] = float(result['fault_score'])
     if not _cfg_get(fault_cfg, 'log_only', True):
@@ -221,4 +225,7 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
     if should_save(step):
       cp.save()
 
+  # Periodic saves are wall-clock based. Persist once more at the exact target
+  # step so staged long runs can evaluate and resume deterministic milestones.
+  cp.save()
   logger.close()

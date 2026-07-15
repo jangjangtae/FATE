@@ -85,12 +85,7 @@ class RSSM(nj.Module):
     prior_logit = self._prior(deter)
 
     # Posterior after conditioning on observation tokens.
-    tokens = tokens.reshape((*deter.shape[:-1], -1))
-    x = tokens if self.absolute else jnp.concatenate([deter, tokens], -1)
-    for i in range(self.obslayers):
-      x = self.sub(f'obs{i}', nn.Linear, self.hidden, **self.kw)(x)
-      x = nn.act(self.act)(self.sub(f'obs{i}norm', nn.Norm, self.norm)(x))
-    logit = self._logit('obslogit', x)
+    logit = self._posterior(deter, tokens)
 
     stoch = nn.cast(self._dist(logit).sample(seed=nj.seed()))
     carry = dict(deter=deter, stoch=stoch)
@@ -110,6 +105,15 @@ class RSSM(nj.Module):
         x.dtype == nn.COMPUTE_DTYPE
         for x in (deter, stoch, logit, prior_logit))
     return carry, (entry, feat)
+
+  def _posterior(self, deter, tokens):
+    """Observation-conditioned posterior for arbitrary deterministic state."""
+    tokens = tokens.reshape((*deter.shape[:-1], -1))
+    x = tokens if self.absolute else jnp.concatenate([deter, tokens], -1)
+    for i in range(self.obslayers):
+      x = self.sub(f'obs{i}', nn.Linear, self.hidden, **self.kw)(x)
+      x = nn.act(self.act)(self.sub(f'obs{i}norm', nn.Norm, self.norm)(x))
+    return self._logit('obslogit', x)
 
   def imagine(self, carry, policy, length, training, single=False):
     if single:

@@ -38,10 +38,12 @@ def eval_only(make_agent, make_env, make_logger, args):
   use_fault = _fault_enabled(args)
   faultlib = None
   ref_agent = None
+  fault_tracker = None
   fault_stats = {}
   if use_fault:
     from dreamerv3 import fault_score as faultlib
     ref_agent = make_agent()
+    fault_tracker = faultlib.FaultRewardTracker(fault_cfg)
     fault_stats = faultlib.load_norm_stats(_cfg_get(
         fault_cfg, 'norm_stats', ''))
   logger = make_logger()
@@ -72,6 +74,7 @@ def eval_only(make_agent, make_env, make_logger, args):
 
   ep_step = defaultdict(int)
   ep_index = defaultdict(int)
+  fault_prev_score = defaultdict(float)
 
   @elements.timer.section('logfn')
   def logfn(tran, worker):
@@ -167,9 +170,15 @@ def eval_only(make_agent, make_env, make_logger, args):
   def apply_fault_score(tran, worker):
     if not use_fault:
       return
+    if tran['is_first']:
+      fault_prev_score[worker] = 0.0
+    tran['log/fault_score_prev'] = np.float32(fault_prev_score[worker])
     result = faultlib.compute_transition_fault(
-        tran, fault_cfg, fault_stats, force_log_only=True)
+        tran, fault_cfg, fault_stats, force_log_only=True,
+        beta_override=fault_tracker.beta)
+    fault_tracker.apply(tran, worker, result, force_log_only=True)
     faultlib.add_transition_fault_logs(tran, result)
+    fault_prev_score[worker] = float(result['fault_score'])
 
   driver.on_step(apply_fault_score)
   driver.on_step(logfn)

@@ -31,6 +31,7 @@ defaults:
     procgen: {size: [96, 96], resize: pillow}
     crafter: {size: [64, 64], logs: False, use_logdir: True}
     craftax: {logs: True, length: 10000, use_seed: True, platform: cpu}
+    minigrid: {obs_mode: symbolic, size: [64, 64], tile_size: 8, length: 360, use_seed: True, fault_profile: clean}
     atari100k: {size: [64, 64], repeat: 4, sticky: False, gray: False, actions: needed, lives: unused, noops: 30, autostart: False, resize: pillow, clip_reward: False}
     dmlab: {size: [64, 64], repeat: 4, episodic: True, use_seed: True}
     minecraft: {size: [64, 64], break_speed: 100.0, logs: False, length: 36000}
@@ -55,6 +56,8 @@ defaults:
     use_latent_kl: True
     use_reward_error: True
     use_recon_error: False
+    use_kl_bound: False
+    score_source: latent_reward
     log_only: True
     w_kl: 1.0
     w_reward: 1.0
@@ -63,6 +66,27 @@ defaults:
     reward_threshold: 1.0
     reward_delta_threshold: 0.5
     reward_gate: none
+    context_min_count: 50
+    semantic_coverage_beta: 0.0
+    unique_suspicious_beta: 0.0
+    repeat_suspicious_penalty: 0.0
+    suspicious_threshold: 1.0
+    adaptive_beta: False
+    adaptive_task_target: 0.0
+    adaptive_beta_down: 0.9
+    adaptive_beta_up: 1.05
+    adaptive_beta_min: 0.0
+    adaptive_beta_max: 1.0
+    adaptive_task_ema: 0.1
+    constraint_mode: none
+    constraint_task_target: 0.0
+    constraint_lambda_init: 1.0
+    constraint_lambda_lr: 0.05
+    constraint_lambda_min: 0.0
+    constraint_lambda_max: 10.0
+    constraint_novelty_scale: 1.0
+    constraint_task_scale: 1.0
+    constraint_warmup_episodes: 10
     trace: fault_score_trace.jsonl
 
   calibration:
@@ -216,6 +240,19 @@ craftax_symbolic:
   <<: *size1m
   task: craftax_classic_symbolic
   run: {steps: 1.1e6, envs: 16, train_ratio: 512}
+
+minigrid:
+  <<: *size1m
+  task: minigrid_doorkey6x6
+  run: {steps: 3e5, envs: 16, train_ratio: 128}
+  replay.size: 1e5
+
+minigrid_vision:
+  <<: *size1m
+  task: minigrid_doorkey6x6
+  env.minigrid.obs_mode: rgb
+  run: {steps: 3e5, envs: 16, train_ratio: 128}
+  replay.size: 1e5
 
 dmc_proprio:
   <<: *size1m

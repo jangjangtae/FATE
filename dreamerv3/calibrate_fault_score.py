@@ -50,6 +50,8 @@ def clean_fault_env():
   os.environ['CRAFTER_TESTER_REWARD'] = '0'
   os.environ['CRAFTER_USE_RND'] = '0'
   os.environ['CRAFTER_RND_UPDATE'] = '0'
+  os.environ['CRAFTAX_FAULT'] = '0'
+  os.environ['CRAFTAX_FAULT_SAMPLER'] = '0'
 
 
 def resolve_checkpoint(path):
@@ -70,6 +72,7 @@ class Collector:
     self.latent_kl = []
     self.reward_error = []
     self.fault_raw = []
+    self.context_scores = {}
     self.trace_path = trace_path and pathlib.Path(trace_path).expanduser()
     if self.trace_path:
       self.trace_path.parent.mkdir(parents=True, exist_ok=True)
@@ -92,6 +95,9 @@ class Collector:
       self.latent_kl.append(latent_kl)
       self.reward_error.append(reward_error)
       self.fault_raw.append(fault_raw)
+      context = fault_score.context_keys(tran)
+      for key in context.values():
+        self.context_scores.setdefault(key, []).append(fault_raw)
       self.steps += 1
 
       if self.trace_path:
@@ -105,6 +111,7 @@ class Collector:
             'latent_kl_surprise': latent_kl,
             'reward_prediction_error': reward_error,
             'fault_score_raw': fault_raw,
+            'fault_context_key': context['full'],
             'is_last': bool(tran['is_last']),
             'is_terminal': bool(tran['is_terminal']),
         }
@@ -119,6 +126,11 @@ class Collector:
     data.update(fault_score.summarize(self.latent_kl, 'latent_kl'))
     data.update(fault_score.summarize(self.reward_error, 'reward_error'))
     data.update(fault_score.summarize(self.fault_raw, 'fault_score'))
+    data['context_schema'] = fault_score.CONTEXT_SCHEMA
+    data['context_stats'] = {
+        key: fault_score.summarize(values, 'fault_score')
+        for key, values in sorted(self.context_scores.items())
+    }
     data['episodes'] = int(self.episodes)
     data['steps'] = int(self.steps)
     return data
