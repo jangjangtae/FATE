@@ -82,6 +82,65 @@ export XLA_FLAGS=--xla_gpu_cuda_data_dir=/usr/lib/cuda
 If XLA cannot find `libdevice.10.bc`, check the CUDA path used by
 `XLA_FLAGS`. The local queue scripts include safeguards for this issue.
 
+## Craftax Setup
+
+The experiments use Craftax, not the original Python Crafter environment.
+Craftax is a JAX-based reimplementation and extension of Crafter. The local
+runs used Craftax `1.6.1` from:
+
+```text
+https://github.com/MichaelTMatthews/Craftax
+```
+
+Recommended setup is to keep the Dreamer/JAX CUDA environment fixed and install
+Craftax into a repo-local dependency directory so it does not overwrite the JAX
+wheel used by DreamerV3:
+
+```bash
+cd /path/to/FATE
+mkdir -p .deps/craftax_pkgs
+
+python -m pip install --target .deps/craftax_pkgs --no-deps \
+  craftax==1.6.1 gymnax==0.0.9 gymnasium==1.3.0
+
+export PYTHONPATH=$PWD/.deps/craftax_pkgs${PYTHONPATH:+:$PYTHONPATH}
+```
+
+If your environment is missing optional runtime packages, install them in the
+main environment:
+
+```bash
+python -m pip install pygame imageio matplotlib
+```
+
+Check that Craftax is visible:
+
+```bash
+python - <<'PY'
+import craftax
+print("craftax:", getattr(craftax, "__version__", "no-version"), craftax.__file__)
+PY
+```
+
+Run a small DreamerV3/Craftax probe:
+
+```bash
+ROOT=/tmp/fate_craftax_probe \
+STEPS=512 \
+ENVS=1 \
+TRAIN_RATIO=1 \
+BATCH_SIZE=2 \
+BATCH_LENGTH=8 \
+REPORT_LENGTH=8 \
+REPLAY_SIZE=1000 \
+CRAFTAX_ENV_SMOKE=1 \
+./dreamerv3/run_craftax_speed_probe.sh
+```
+
+The FATE wrapper uses the Dreamer config block `craftax`, which creates
+`embodied.envs.craftax.Craftax("classic_pixels")` with 64x64 RGB observations
+and 18 discrete actions.
+
 ## Quick Checks
 
 Before long runs, compile the main scripts and run the small fault tests:

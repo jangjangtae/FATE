@@ -70,6 +70,66 @@ export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu:/usr/lib/
 If `libdevice.10.bc` is not found by XLA, the queue scripts create a symlink
 from `/usr/lib/cuda/nvvm/libdevice/libdevice.10.bc` when available.
 
+## Craftax Dependency Setup
+
+These experiments use Craftax rather than the original Python Crafter package.
+Craftax is a JAX-based Crafter-style benchmark from:
+
+```text
+https://github.com/MichaelTMatthews/Craftax
+```
+
+The local experiments used Craftax `1.6.1`. To avoid changing the JAX/CUDA
+wheel already installed for DreamerV3, install Craftax into a repo-local target
+directory and prepend that directory to `PYTHONPATH`:
+
+```bash
+cd /home/railab/dreamerv3
+mkdir -p .deps/craftax_pkgs
+
+./dreamer_cuda/bin/python -m pip install --target .deps/craftax_pkgs --no-deps \
+  craftax==1.6.1 gymnax==0.0.9 gymnasium==1.3.0
+
+export PYTHONPATH=$PWD/.deps/craftax_pkgs${PYTHONPATH:+:$PYTHONPATH}
+```
+
+If optional rendering/runtime dependencies are missing, install them in the
+same Python environment:
+
+```bash
+./dreamer_cuda/bin/python -m pip install pygame imageio matplotlib
+```
+
+Verify the package path:
+
+```bash
+./dreamer_cuda/bin/python - <<'PY'
+import craftax
+print("craftax:", getattr(craftax, "__version__", "no-version"), craftax.__file__)
+PY
+```
+
+Run a small environment and training compile probe before starting long jobs:
+
+```bash
+cd /home/railab/dreamerv3
+ROOT=/tmp/fate_craftax_probe \
+STEPS=512 \
+ENVS=1 \
+TRAIN_RATIO=1 \
+BATCH_SIZE=2 \
+BATCH_LENGTH=8 \
+REPORT_LENGTH=8 \
+REPLAY_SIZE=1000 \
+CRAFTAX_ENV_SMOKE=1 \
+./dreamerv3/run_craftax_speed_probe.sh
+```
+
+The DreamerV3 config block `craftax` uses
+`embodied.envs.craftax.Craftax("classic_pixels")`, producing 64x64 RGB
+observations with 18 discrete actions. FATE fault profiles and bug labels are
+implemented in `embodied/envs/craftax.py`.
+
 ## Quick Checks
 
 Run these before long unattended jobs:
@@ -319,4 +379,3 @@ progression-dependent gameplay, so a competent clean policy naturally exposes
 some faults. The main claim is that ExcessDelta preserves this competence while
 actively biasing adaptation toward calibrated deviations from normal clean
 dynamics, with the clearest advantage under sparse fault activation.
-
