@@ -33,7 +33,7 @@ METHODS = [
     ("ScratchDreamer", "ScratchDreamer", "#666666"),
     ("DreamerRND", "Dreamer+RND", "#E69F00"),
     ("DenseSurprise", "Dense surprise", "#D55E00"),
-    ("ExcessDelta", "ExcessDelta (ours)", "#0072B2"),
+    ("ExcessDelta", "FATE (ours)", "#0072B2"),
     ("ContextualExcess", "Contextual excess", "#009E73"),
 ]
 
