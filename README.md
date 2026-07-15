@@ -1,4 +1,8 @@
-# Mastering Diverse Domains through World Models
+# FATE
+
+## Fault-Seeking Adaptation with Transition Excess
+
+This repository builds on DreamerV3 for clean-prior fault-seeking game testing.
 
 A reimplementation of [DreamerV3][paper], a scalable and general reinforcement
 learning algorithm that masters a wide range of applications with fixed
