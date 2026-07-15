@@ -5,6 +5,11 @@ fault-seeking experiments in the AAAI submission draft. The code is based on
 DreamerV3, with additional controlled fault seeding, frozen clean-reference
 fault scoring, RND and scratch baselines, and analysis scripts.
 
+For the paper-facing adaptation/evaluation protocol, see
+`docs/aaai_experimental_protocol.md`. That document explicitly separates clean
+pretraining, clean calibration, fault adaptation, and seen/holdout/sparse
+evaluation.
+
 ## What Is In This Branch
 
 Core method and logging:
@@ -184,6 +189,22 @@ The final main comparison uses seven methods:
 
 Bug labels and bug detectors are used only for evaluation and traces. They are
 not used as training rewards in the main methods.
+
+## Protocol Summary
+
+The main FATE protocol is:
+
+| Stage | Profile | Update? | Notes |
+|---|---|---|---|
+| Clean pretraining | clean Craftax | yes | learns the clean policy and clean dynamics prior |
+| Clean calibration | clean Craftax | no | estimates seed-specific p95 surprise from clean rollouts |
+| Adaptation | `benchmark_train` | active agent only | no bug labels are used as rewards |
+| Evaluation | `benchmark_seen` | no | same operators as train, new evaluation rollouts |
+| Evaluation | `benchmark_holdout` | no | unseen operators not used during adaptation |
+| Evaluation | `benchmark_sparse` | no | same operators as holdout, rarer and lower-severity activation |
+
+The same adapted checkpoint is evaluated on seen, holdout, and sparse splits.
+No additional holdout or sparse adaptation is performed.
 
 ## Fresh 5-Seed Run
 

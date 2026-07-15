@@ -59,6 +59,8 @@ Key FATE additions:
   RND, scratch, and ablation baselines.
 - `docs/aaai_reproducibility.md`: detailed experiment commands and current
   reproducibility notes.
+- `docs/aaai_experimental_protocol.md`: paper-facing protocol for clean
+  pretraining, calibration, adaptation, and evaluation splits.
 - `docs/fault_suite_split_summary.md`: Craftax fault taxonomy and split
   definitions.
 - `docs/craftax_fault_seeding_rationale.md`: rationale for controlled fault
@@ -162,6 +164,12 @@ Detailed commands are provided in:
 
 ```text
 docs/aaai_reproducibility.md
+```
+
+The paper-facing protocol is summarized in:
+
+```text
+docs/aaai_experimental_protocol.md
 ```
 
 The high-level workflow is:

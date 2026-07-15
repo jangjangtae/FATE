@@ -8,6 +8,13 @@ uses clean-world-model surprise as the fault-seeking signal.
 
 ## Split Definitions
 
+In the main Craftax protocol, adaptation is performed only on the `train`
+profile. The resulting checkpoint is then evaluated without further updates on
+`seen`, `holdout`, and `sparse`. Thus, holdout and sparse results should be
+interpreted as evaluation-time transfer to unseen or rare-unseen fault
+conditions within the controlled Craftax fault suite, not as split-specific
+fine-tuning results.
+
 | Split | Meaning | Used For |
 |---|---|---|
 | `clean` | No seeded faults. | Clean reference training, calibration, false-positive checks. |
@@ -18,7 +25,7 @@ uses clean-world-model surprise as the fault-seeking signal.
 
 For Craftax, `sparse` uses the same operator set as `holdout`, but with lower
 episode probability, lower manifestation severity, and longer cooldown. Thus,
-Craftax `sparse` is best described as a rare unseen-fault split.
+Craftax `sparse` is best described as a rare unseen-fault evaluation split.
 
 For MiniGrid, `sparse` samples from all six MiniGrid faults with a low faulty
 episode probability. Thus, MiniGrid `sparse` is a rare mixed-fault split.
@@ -144,3 +151,11 @@ For both environments, report metrics separately for `clean`, `seen`,
 This split makes the evaluation question explicit: the agent should maintain
 game performance while improving discovery of both seen and unseen transition
 faults, especially under sparse manifestation.
+
+For paper text, avoid saying that the agent is adapted separately on holdout or
+sparse. A safe phrasing is:
+
+> We adapt each method on the `benchmark_train` fault profile and evaluate the
+> same adapted checkpoint on seen, holdout, and sparse profiles. Holdout uses
+> unseen fault operators, while sparse uses the same holdout operators under
+> lower activation probability, lower severity, and longer cooldown.
